@@ -54,8 +54,8 @@ ALL_COLS = FEATURES + [TARGET]
 # Bornes physiques raisonnables pour chaque feature (domaine eau potable/naturelle)
 PHYSICAL_BOUNDS: dict[str, Tuple[float, float]] = {
     "ph":           (0.0,  14.0),
-    "Solids":       (0.0,  70_000.0),   # mg/L — TDS eau douce / saumâtre
-    "Conductivity": (0.0,  1_500.0),    # µS/cm — eau douce à légèrement minéralisée
+    "Solids":       (0.0,  1000.0),   # mg/L — TDS eau douce / saumâtre
+    "Conductivity": (0.0,  1500.0),    # µS/cm — eau douce à légèrement minéralisée
     "Turbidity":    (0.0,  100.0),      # NTU
 }
 
@@ -726,12 +726,18 @@ def preprocess_for_ml(
     X_train_scaled = fitted_scaler.fit_transform(X_train)
     X_test_scaled  = fitted_scaler.transform(X_test)
 
-    logger.info(
-        "RobustScaler fitte sur le train set. "
-        "Centre (mediane) : %s | Echelle (IQR) : %s",
-        np.round(fitted_scaler.center_, 3),
-        np.round(fitted_scaler.scale_,  3),
-    )
+    if hasattr(fitted_scaler, "center_") and hasattr(fitted_scaler, "scale_"):
+        # Cas RobustScaler (comportement par défaut)
+        logger.info(
+            "RobustScaler fitte sur le train set. "
+            "Centre (mediane) : %s | Echelle (IQR) : %s",
+            np.round(fitted_scaler.center_, 3),
+            np.round(fitted_scaler.scale_,  3),
+        )
+    else:
+        # Scaler custom injecté (StandardScaler, MinMaxScaler, ...) :
+        # pas d'attributs center_/scale_ garantis, on logue uniquement le type.
+        logger.info("%s fitte sur le train set.", fitted_scaler.__class__.__name__)
 
     return (
         X_train_scaled,
