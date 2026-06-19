@@ -159,7 +159,7 @@ def _gmean_score(y_true, y_pred) -> float:
 
 # G-mean scorer : utilisé comme métrique d'optimisation du GridSearchCV.
 # Empêche le biais vers la classe majoritaire tout en restant sensible
-# au déséquilibre des classes — exactement ce que Fbeta seul ne garantit pas.
+# au déséquilibre des classes.
 GMEAN_SCORER = make_scorer(_gmean_score)
 
 METRICS = {

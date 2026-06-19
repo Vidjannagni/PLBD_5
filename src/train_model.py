@@ -81,7 +81,7 @@ from config import (
     METRICS, MODEL_SELECTION, PATHS, PLOT, POSITIVE_CLASS, RANDOM_STATE,
     REBALANCING, TARGET, THRESHOLD_TUNING, ensure_dirs,
 )
-from src.models_training.data_processing import preprocess_for_ml, raw_data_processing
+from data_processing import preprocess_for_ml, raw_data_processing
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
