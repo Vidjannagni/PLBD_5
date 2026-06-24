@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AQUA-SENS — Qualité de l'eau</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* ── Reset & Variables ──────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --navy:      #0A2342;
+      --ocean:     #065A82;
+      --teal:      #1C7293;
+      --mint:      #02C39A;
+      --mint-dim:  rgba(2,195,154,.12);
+      --bg:        #0d1117;
+      --bg2:       #161b22;
+      --bg3:       #21262d;
+      --border:    #30363d;
+      --text:      #e6edf3;
+      --text-muted:#8b949e;
+      --red:       #f85149;
+      --orange:    #e3933a;
+      --yellow:    #d29922;
+      --green:     #3fb950;
+      --radius:    10px;
+      --shadow:    0 4px 24px rgba(0,0,0,.4);
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────── */
+    header {
+      background: var(--navy);
+      border-bottom: 2px solid var(--mint);
+      padding: .75rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo { display: flex; align-items: center; gap: .6rem; }
+    .logo-icon {
+      width: 32px; height: 32px;
+      background: var(--mint);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem;
+    }
+    .logo-text { font-size: 1.25rem; font-weight: 700; color: #fff; letter-spacing: .05em; }
+    .logo-sub  { font-size: .72rem; color: #8bb8cc; font-weight: 300; }
+    .header-right { display: flex; align-items: center; gap: 1rem; }
+    .ws-badge {
+      display: flex; align-items: center; gap: .4rem;
+      font-size: .75rem; color: var(--text-muted);
+    }
+    .ws-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--red);
+      transition: background .3s;
+    }
+    .ws-dot.connected { background: var(--mint); animation: pulse 2s infinite; }
+    @keyframes pulse {
+      0%,100% { opacity:1; } 50% { opacity:.4; }
+    }
+    .last-update { font-size: .72rem; color: var(--text-muted); font-family: 'JetBrains Mono'; }
+
+    /* ── Tabs ────────────────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
+    }
+    .tab-btn {
+      padding: .75rem 1.2rem;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: .9rem;
+      font-weight: 500;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all .2s;
+    }
+    .tab-btn.active { color: var(--mint); border-bottom-color: var(--mint); }
+    .tab-btn:hover:not(.active) { color: var(--text); }
+
+    /* ── Main layout ─────────────────────────────────────────────────── */
+    main { flex: 1; padding: 1.5rem; max-width: 1400px; margin: 0 auto; width: 100%; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Cards ───────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      box-shadow: var(--shadow);
+    }
+    .card-title {
+      font-size: .78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--text-muted);
+      margin-bottom: .75rem;
+    }
+
+    /* ── Tab 1 : Diagnostic ──────────────────────────────────────────── */
+    .diag-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto auto auto;
+      gap: 1rem;
+    }
+    @media (max-width: 900px) {
+      .diag-grid { grid-template-columns: 1fr; }
+    }
+
+    /* Potabilité (span 2 cols) */
+    .potability-card {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .potability-badge {
+      padding: .6rem 2rem;
+      border-radius: 2rem;
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      transition: all .4s;
+    }
+    .badge-potable     { background: rgba(63,185,80,.18); color: var(--green); border: 2px solid var(--green); }
+    .badge-nonpotable  { background: rgba(248,81,73,.18); color: var(--red);   border: 2px solid var(--red);   animation: blink .8s step-end infinite; }
+    .badge-unknown     { background: var(--bg3); color: var(--text-muted); border: 2px solid var(--border); }
+    @keyframes blink { 50% { opacity: .5; } }
+
+    .confidence-wrap { flex: 1; min-width: 180px; }
+    .confidence-label { font-size: .78rem; color: var(--text-muted); margin-bottom: .4rem; }
+    .confidence-bar-bg {
+      height: 8px; border-radius: 4px;
+      background: var(--bg3);
+      overflow: hidden;
+    }
+    .confidence-bar-fill {
+      height: 100%; border-radius: 4px;
+      background: linear-gradient(90deg, var(--ocean), var(--mint));
+      transition: width .6s ease;
+      width: 0%;
+    }
+    .confidence-value { font-size: 1.1rem; font-weight: 600; color: var(--mint); margin-top: .3rem; }
+    .inference-time { font-size: .72rem; color: var(--text-muted); font-family: 'JetBrains Mono'; }
+
+    /* Capteurs */
+    .sensors-grid {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: .75rem;
+    }
+    @media (max-width: 700px) { .sensors-grid { grid-template-columns: repeat(2, 1fr); } }
+
+    .sensor-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+      transition: border-color .3s;
+    }
+    .sensor-card.ok       { border-color: var(--border); }
+    .sensor-card.warning  { border-color: var(--orange); }
+    .sensor-card.critical { border-color: var(--red); }
+    .sensor-name { font-size: .75rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+    .sensor-value { font-size: 1.8rem; font-weight: 700; color: var(--text); font-family: 'JetBrains Mono'; margin: .3rem 0; line-height: 1; }
+    .sensor-unit  { font-size: .75rem; color: var(--text-muted); }
+    .sensor-norm  { font-size: .68rem; margin-top: .4rem; padding: .15rem .5rem; border-radius: 1rem; }
+    .norm-ok      { background: rgba(63,185,80,.15); color: var(--green); }
+    .norm-warn    { background: rgba(227,147,58,.15);  color: var(--orange); }
+    .norm-crit    { background: rgba(248,81,73,.15);  color: var(--red); }
+
+    /* SHAP */
+    .shap-bar-list { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+    .shap-item { display: flex; align-items: center; gap: .6rem; font-size: .85rem; }
+    .shap-feat { width: 110px; color: var(--text-muted); }
+    .shap-bar-bg { flex: 1; height: 10px; background: var(--bg3); border-radius: 5px; overflow: hidden; }
+    .shap-bar-fill { height: 100%; border-radius: 5px; background: linear-gradient(90deg, var(--ocean), var(--mint)); transition: width .8s ease; }
+    .shap-pct { width: 42px; text-align: right; font-family: 'JetBrains Mono'; font-size: .75rem; color: var(--mint); }
+
+    /* Filtration */
+    .filter-list { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+    .filter-item {
+      display: flex; align-items: flex-start; gap: .7rem;
+      padding: .6rem .8rem;
+      background: var(--bg3);
+      border-radius: 6px;
+      font-size: .85rem;
+    }
+    .filter-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 3px; flex-shrink: 0; }
+    .filter-ok   { background: var(--green); }
+    .filter-warn { background: var(--orange); }
+    .filter-info { background: var(--teal); }
+    .filter-title { font-weight: 600; color: var(--text); }
+    .filter-desc  { font-size: .78rem; color: var(--text-muted); }
+
+    /* ── Tab 2 : Prévision ──────────────────────────────────────────── */
+    .forecast-top {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;
+    }
+    .forecast-title { font-size: 1rem; font-weight: 600; }
+    .forecast-meta  { font-size: .78rem; color: var(--text-muted); }
+
+    .btn {
+      padding: .55rem 1.2rem;
+      border: none;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: .875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .btn-primary {
+      background: var(--mint);
+      color: var(--navy);
+    }
+    .btn-primary:hover { background: #03d9ab; }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: .75rem;
+      margin-bottom: 1rem;
+    }
+    @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 600px) { .charts-grid { grid-template-columns: 1fr; } }
+
+    .chart-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: .75rem; }
+    .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .5rem; }
+    .chart-feat { font-size: .8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+    .chart-status { font-size: .7rem; padding: .1rem .5rem; border-radius: 1rem; }
+    .chart-canvas { height: 140px !important; }
+
+    /* Alertes */
+    .alerts-header {
+      display: flex; align-items: center; gap: .75rem;
+      margin-bottom: .75rem;
+    }
+    .alert-count-badge {
+      padding: .15rem .5rem;
+      border-radius: 1rem;
+      font-size: .72rem;
+      font-weight: 700;
+    }
+    .badge-crit { background: rgba(248,81,73,.2);  color: var(--red);    border: 1px solid var(--red); }
+    .badge-warn { background: rgba(227,147,58,.2); color: var(--orange); border: 1px solid var(--orange); }
+    .badge-info { background: rgba(28,114,147,.2); color: var(--teal);   border: 1px solid var(--teal); }
+
+    .alert-list { display: flex; flex-direction: column; gap: .5rem; }
+    .alert-item {
+      display: flex; gap: .75rem;
+      padding: .75rem 1rem;
+      border-radius: 8px;
+      border-left: 3px solid transparent;
+      background: var(--bg3);
+      animation: slideIn .3s ease;
+    }
+    @keyframes slideIn { from { opacity:0; transform: translateY(-6px); } to { opacity:1; transform: none; } }
+    .alert-CRITICAL { border-left-color: var(--red); }
+    .alert-WARNING  { border-left-color: var(--orange); }
+    .alert-INFO     { border-left-color: var(--teal); }
+    .alert-icon { font-size: 1.1rem; flex-shrink: 0; margin-top: 2px; }
+    .alert-body { flex: 1; }
+    .alert-msg  { font-size: .875rem; font-weight: 600; color: var(--text); }
+    .alert-detail { font-size: .78rem; color: var(--text-muted); margin-top: .2rem; line-height: 1.4; }
+    .alert-risk   { font-size: .75rem; color: var(--orange); margin-top: .25rem; }
+    .alert-badge  { align-self: flex-start; font-size: .68rem; padding: .15rem .5rem; border-radius: 1rem; font-weight: 700; }
+    .alert-hour   { font-size: .68rem; color: var(--text-muted); font-family: 'JetBrains Mono'; margin-top: .3rem; }
+
+    .no-alerts {
+      text-align: center; padding: 2rem;
+      color: var(--green); font-size: .9rem;
+    }
+
+    /* ── Spinner ─────────────────────────────────────────────────────── */
+    .spinner {
+      width: 20px; height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--mint);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Toast ───────────────────────────────────────────────────────── */
+    #toast {
+      position: fixed; bottom: 1.5rem; right: 1.5rem;
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: .75rem 1.2rem;
+      font-size: .85rem; color: var(--text);
+      box-shadow: var(--shadow);
+      transform: translateY(60px); opacity: 0;
+      transition: all .3s ease;
+      z-index: 999;
+    }
+    #toast.show { transform: none; opacity: 1; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">💧</div>
+    <div>
+      <div class="logo-text">AQUA-SENS</div>
+      <div class="logo-sub">Diagnostic &amp; Prévision — École Centrale Casablanca</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="ws-badge">
+      <div class="ws-dot" id="wsDot"></div>
+      <span id="wsLabel">Déconnecté</span>
+    </div>
+    <div class="last-update" id="lastUpdate">—</div>
+  </div>
+</header>
+
+<!-- ── Tabs ───────────────────────────────────────────────────────────────── -->
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('diagnostic')">⚡ Diagnostic temps réel</button>
+  <button class="tab-btn"        onclick="switchTab('forecast')">📈 Prévision 24h &amp; Alertes</button>
+</div>
+
+<!-- ── Main ───────────────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- TAB 1 : DIAGNOSTIC                                                  -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div class="tab-panel active" id="panel-diagnostic">
+    <div class="diag-grid">
+
+      <!-- Potabilité -->
+      <div class="card potability-card">
+        <div>
+          <div class="card-title">Résultat diagnostic</div>
+          <div class="potability-badge badge-unknown" id="potBadge">En attente…</div>
+        </div>
+        <div class="confidence-wrap">
+          <div class="confidence-label">Indice de risque (probabilité Non potable)</div>
+          <div class="confidence-bar-bg">
+            <div class="confidence-bar-fill" id="confBar"></div>
+          </div>
+          <div class="confidence-value" id="confVal">—</div>
+        </div>
+        <div>
+          <div class="confidence-label">Seuil de décision</div>
+          <div class="confidence-value" id="threshVal" style="color:var(--teal)">—</div>
+          <div class="inference-time" id="inferTime">—</div>
+        </div>
+      </div>
+
+      <!-- Capteurs -->
+      <div class="sensors-grid">
+        <div class="sensor-card" id="card-ph">
+          <div class="sensor-name">pH</div>
+          <div class="sensor-value" id="val-ph">—</div>
+          <div class="sensor-unit">NM : 6,5 – 8,5</div>
+          <div class="sensor-norm norm-ok" id="norm-ph">—</div>
+        </div>
+        <div class="sensor-card" id="card-Solids">
+          <div class="sensor-name">TDS</div>
+          <div class="sensor-value" id="val-Solids">—</div>
+          <div class="sensor-unit">mg/L &nbsp; NM : ≤ 1500</div>
+          <div class="sensor-norm norm-ok" id="norm-Solids">—</div>
+        </div>
+        <div class="sensor-card" id="card-Conductivity">
+          <div class="sensor-name">Conductivité</div>
+          <div class="sensor-value" id="val-Conductivity">—</div>
+          <div class="sensor-unit">µS/cm &nbsp; NM : ≤ 2700</div>
+          <div class="sensor-norm norm-ok" id="norm-Conductivity">—</div>
+        </div>
+        <div class="sensor-card" id="card-Turbidity">
+          <div class="sensor-name">Turbidité</div>
+          <div class="sensor-value" id="val-Turbidity">—</div>
+          <div class="sensor-unit">NTU &nbsp; NM : ≤ 5</div>
+          <div class="sensor-norm norm-ok" id="norm-Turbidity">—</div>
+        </div>
+      </div>
+
+      <!-- SHAP -->
+      <div class="card">
+        <div class="card-title">Importance des capteurs (SHAP)</div>
+        <ul class="shap-bar-list" id="shapList">
+          <li style="color:var(--text-muted);font-size:.82rem">Chargement du résumé SHAP…</li>
+        </ul>
+      </div>
+
+      <!-- Filtration -->
+      <div class="card">
+        <div class="card-title">Recommandations filtration</div>
+        <ul class="filter-list" id="filterList">
+          <li class="filter-item">
+            <div class="filter-dot filter-info"></div>
+            <div>
+              <div class="filter-title">En attente de données capteurs</div>
+              <div class="filter-desc">Les recommandations s'affichent après la première lecture.</div>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- TAB 2 : PRÉVISION                                                   -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="panel-forecast">
+
+    <div class="forecast-top">
+      <div>
+        <div class="forecast-title">Prévision LSTM — horizon 24h</div>
+        <div class="forecast-meta" id="forecastMeta">
+          Cliquez sur « Lancer » pour calculer la prévision à partir de l'historique des capteurs.
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btnForecast" onclick="runForecast()">
+        🔮 Lancer la prévision
+      </button>
+    </div>
+
+    <!-- Graphiques -->
+    <div class="charts-grid" id="chartsGrid">
+      <!-- Généré dynamiquement -->
+    </div>
+
+    <!-- Alertes -->
+    <div class="card">
+      <div class="alerts-header">
+        <div class="card-title" style="margin:0">Alertes préventives — Opérateurs source</div>
+        <span class="alert-count-badge badge-crit" id="cntCrit" style="display:none"></span>
+        <span class="alert-count-badge badge-warn" id="cntWarn" style="display:none"></span>
+        <span class="alert-count-badge badge-info" id="cntInfo" style="display:none"></span>
+      </div>
+      <div class="alert-list" id="alertList">
+        <div class="no-alerts">
+          ✅ Lancez une prévision pour générer les alertes préventives
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</main>
+
+<div id="toast"></div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════════
+// CONSTANTES
+// ════════════════════════════════════════════════════════════════════════════
+const NM = {
+  ph:           { min: 6.5,  max: 8.5   },
+  Solids:       { min: 0,    max: 1500  },
+  Conductivity: { min: 0,    max: 2700  },
+  Turbidity:    { min: 0,    max: 5     },
+  temperature:  { min: 0,    max: 25    },
+};
+const FEAT_LABELS = {
+  ph: 'pH', Solids: 'TDS', Conductivity: 'Conductivité',
+  Turbidity: 'Turbidité', temperature: 'Température',
+};
+const FEAT_UNITS = {
+  ph: '', Solids: 'mg/L', Conductivity: 'µS/cm', Turbidity: 'NTU', temperature: '°C',
+};
+const PALETTE = ['#2E86AB','#E84855','#3BB273','#F18F01','#7B2D8B'];
+const FILTER_DB = {
+  Turbidity:    { title: 'Filtre à sédiments activé',       desc: 'Turbidité élevée — retirer les particules en suspension.', level: 'warn' },
+  ph:           { title: 'Filtre à charbon actif conseillé', desc: 'pH hors norme — adsorption des composés acides/basiques.',  level: 'warn' },
+  Solids:       { title: 'Filtre à charbon compressé conseillé', desc: 'TDS élevé — réduction des solides dissous et métaux.',   level: 'warn' },
+  Conductivity: { title: 'Filtre à charbon compressé conseillé', desc: 'Minéralisation excessive — traitement des ions dissous.', level: 'warn' },
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// NAVIGATION TABS
+// ════════════════════════════════════════════════════════════════════════════
+function switchTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// WEBSOCKET — Diagnostic temps réel
+// ════════════════════════════════════════════════════════════════════════════
+let ws = null;
+let wsRetryDelay = 2000;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('wsDot').classList.add('connected');
+    document.getElementById('wsLabel').textContent = 'Connecté';
+    wsRetryDelay = 2000;
+    loadShap();
+  };
+
+  ws.onmessage = e => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'diagnostic') updateDiagnostic(data);
+  };
+
+  ws.onclose = () => {
+    document.getElementById('wsDot').classList.remove('connected');
+    document.getElementById('wsLabel').textContent = 'Reconnexion…';
+    setTimeout(connectWS, wsRetryDelay);
+    wsRetryDelay = Math.min(wsRetryDelay * 1.5, 30000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MISE À JOUR DU DIAGNOSTIC
+// ════════════════════════════════════════════════════════════════════════════
+function updateDiagnostic(data) {
+  // Timestamp
+  const ts = data.timestamp || new Date().toISOString();
+  document.getElementById('lastUpdate').textContent = ts.replace('T', ' ');
+
+  // Capteurs
+  const raw = data.raw_values || {};
+  const oob = data.out_of_bounds || [];
+  ['ph', 'Solids', 'Conductivity', 'Turbidity'].forEach(feat => {
+    const v = raw[feat];
+    if (v === undefined) return;
+    document.getElementById('val-' + feat).textContent =
+      feat === 'Solids' ? Math.round(v) : v.toFixed(feat === 'ph' ? 2 : 1);
+
+    const nm     = NM[feat];
+    const card   = document.getElementById('card-' + feat);
+    const normEl = document.getElementById('norm-' + feat);
+    const ratio  = nm.max > 0 ? v / nm.max : 0;
+
+    if (v < nm.min || v > nm.max) {
+      card.className = 'sensor-card critical';
+      normEl.className = 'sensor-norm norm-crit';
+      normEl.textContent = '⚠ Hors norme NM';
+    } else if (ratio > 0.8 || (nm.min > 0 && v < nm.min * 1.3)) {
+      card.className = 'sensor-card warning';
+      normEl.className = 'sensor-norm norm-warn';
+      normEl.textContent = '▲ Approche seuil';
+    } else {
+      card.className = 'sensor-card ok';
+      normEl.className = 'sensor-norm norm-ok';
+      normEl.textContent = '✓ Conforme NM';
+    }
+  });
+
+  // Badge potabilité
+  const badge   = document.getElementById('potBadge');
+  const label   = data.potability_label || '—';
+  const proba   = data.confidence_proba;
+  const thresh  = data.threshold || 0.5;
+
+  if (label === 'Potable') {
+    badge.className = 'potability-badge badge-potable';
+    badge.textContent = '✅ Potable';
+  } else if (label === 'Non potable') {
+    badge.className = 'potability-badge badge-nonpotable';
+    badge.textContent = '🚨 Non potable';
+  } else {
+    badge.className = 'potability-badge badge-unknown';
+    badge.textContent = label;
+  }
+
+  // Confiance
+  if (proba !== null && proba !== undefined) {
+    const pct = (proba * 100).toFixed(1);
+    document.getElementById('confBar').style.width = pct + '%';
+    document.getElementById('confVal').textContent  = pct + '% risque Non potable';
+    document.getElementById('confBar').style.background =
+      proba >= thresh ? 'linear-gradient(90deg,#c0392b,#f85149)'
+                      : 'linear-gradient(90deg,var(--ocean),var(--mint))';
+  }
+  document.getElementById('threshVal').textContent = 'Seuil : ' + (thresh * 100).toFixed(0) + '%';
+  document.getElementById('inferTime').textContent =
+    'Inférence : ' + (data.inference_time_ms || 0).toFixed(1) + ' ms';
+
+  // Recommandations filtration
+  updateFilterReco(oob);
+}
+
+function updateFilterReco(oob) {
+  const list = document.getElementById('filterList');
+  if (!oob || oob.length === 0) {
+    list.innerHTML = `
+      <li class="filter-item">
+        <div class="filter-dot filter-ok"></div>
+        <div>
+          <div class="filter-title">Aucune action requise</div>
+          <div class="filter-desc">Tous les paramètres sont conformes à la norme NM 03.7.001.</div>
+        </div>
+      </li>`;
+    return;
+  }
+  const seen = new Set();
+  let html = '';
+  oob.forEach(feat => {
+    const rec = FILTER_DB[feat];
+    if (rec && !seen.has(rec.title)) {
+      seen.add(rec.title);
+      html += `<li class="filter-item">
+        <div class="filter-dot filter-warn"></div>
+        <div>
+          <div class="filter-title">${rec.title}</div>
+          <div class="filter-desc">${rec.desc}</div>
+        </div>
+      </li>`;
+    }
+  });
+  if (!html) html = `<li class="filter-item">
+    <div class="filter-dot filter-info"></div>
+    <div><div class="filter-title">Valeurs hors bornes détectées</div>
+    <div class="filter-desc">Paramètre(s) : ${oob.join(', ')}</div></div>
+  </li>`;
+  list.innerHTML = html;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SHAP
+// ════════════════════════════════════════════════════════════════════════════
+async function loadShap() {
+  try {
+    const r = await fetch('/api/shap');
+    if (!r.ok) return;
+    const d = await r.json();
+    renderShap(d);
+  } catch(_) {}
+}
+
+function renderShap(d) {
+  const list  = document.getElementById('shapList');
+  const feats = d.feature_ranking || [];
+  const vals  = d.mean_abs_shap   || {};
+  const maxV  = Math.max(...Object.values(vals), 1e-9);
+
+  list.innerHTML = feats.map(f => {
+    const v   = vals[f] || 0;
+    const pct = ((v / maxV) * 100).toFixed(1);
+    return `<li class="shap-item">
+      <span class="shap-feat">${FEAT_LABELS[f] || f}</span>
+      <div class="shap-bar-bg"><div class="shap-bar-fill" style="width:${pct}%"></div></div>
+      <span class="shap-pct">${pct}%</span>
+    </li>`;
+  }).join('');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PRÉVISION 24h
+// ════════════════════════════════════════════════════════════════════════════
+const _charts = {};
+
+async function runForecast() {
+  const btn = document.getElementById('btnForecast');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Calcul…';
+  document.getElementById('forecastMeta').textContent = 'Inférence LSTM en cours…';
+
+  try {
+    const r = await fetch('/api/forecast');
+    const d = await r.json();
+
+    if (d.error) {
+      showToast('⚠ ' + d.error);
+      document.getElementById('forecastMeta').textContent = d.error;
+      return;
+    }
+
+    renderCharts(d);
+    renderAlerts(d);
+    document.getElementById('forecastMeta').textContent =
+      `Calculé en ${d.inference_ms} ms — ${d.timestamp}  |  ` +
+      `Buffer : ${d.buffer_size}/24 mesures`;
+  } catch(e) {
+    showToast('Erreur réseau : ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🔮 Actualiser la prévision';
+  }
+}
+
+function renderCharts(d) {
+  const grid  = document.getElementById('chartsGrid');
+  const feats = d.features || [];
+
+  // Créer les cartes si pas encore là
+  if (grid.children.length !== feats.length) {
+    grid.innerHTML = '';
+    feats.forEach((feat, i) => {
+      const div = document.createElement('div');
+      div.className = 'chart-card';
+      div.id = 'cc-' + feat;
+      div.innerHTML = `
+        <div class="chart-header">
+          <span class="chart-feat">${FEAT_LABELS[feat] || feat} [${FEAT_UNITS[feat]}]</span>
+          <span class="chart-status" id="cs-${feat}"></span>
+        </div>
+        <canvas id="ch-${feat}" class="chart-canvas"></canvas>`;
+      grid.appendChild(div);
+    });
+  }
+
+  feats.forEach((feat, i) => {
+    const vals  = d.predictions[feat] || [];
+    const hours = d.hours || vals.map((_,j) => j+1);
+    const nm    = NM[feat];
+    const color = PALETTE[i % PALETTE.length];
+
+    // Zone NM (annotation manuelle via dataset)
+    const nmZone = nm ? vals.map(() => nm.max) : null;
+
+    const ctx   = document.getElementById('ch-' + feat);
+    if (!ctx) return;
+
+    // Mettre à jour ou créer
+    if (_charts[feat]) {
+      _charts[feat].data.labels              = hours;
+      _charts[feat].data.datasets[0].data   = vals;
+      if (nmZone) _charts[feat].data.datasets[1].data = nmZone;
+      _charts[feat].update('none');
+    } else {
+      const datasets = [{
+        label: FEAT_LABELS[feat],
+        data: vals,
+        borderColor: color,
+        backgroundColor: color + '22',
+        borderWidth: 2,
+        pointRadius: 2,
+        tension: 0.35,
+        fill: true,
+      }];
+      if (nmZone) datasets.push({
+        label: 'Limite NM',
+        data: nmZone,
+        borderColor: '#3fb95055',
+        borderDash: [4, 4],
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: false,
+      });
+      _charts[feat] = new Chart(ctx, {
+        type: 'line',
+        data: { labels: hours, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 400 },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#21262d',
+              titleColor: '#e6edf3',
+              bodyColor: '#8b949e',
+              borderColor: '#30363d',
+              borderWidth: 1,
+            },
+          },
+          scales: {
+            x: {
+              ticks: { color: '#8b949e', font: { size: 9 }, maxTicksLimit: 8 },
+              grid:  { color: '#21262d' },
+              title: { display: true, text: 'Heure +', color: '#8b949e', font: { size: 9 } },
+            },
+            y: {
+              ticks: { color: '#8b949e', font: { size: 9 } },
+              grid:  { color: '#21262d' },
+            },
+          },
+        },
+      });
+    }
+
+    // Statut
+    const csEl = document.getElementById('cs-' + feat);
+    if (csEl && nm) {
+      const anyExceed = vals.some(v => v > nm.max || (nm.min > 0 && v < nm.min));
+      const anyApproach = vals.some(v => v > nm.max * 0.8);
+      if (anyExceed) {
+        csEl.textContent = '⚠ Dépassement prévu';
+        csEl.style.cssText = 'background:rgba(248,81,73,.15);color:#f85149;border-radius:4px;padding:.1rem .4rem;';
+      } else if (anyApproach) {
+        csEl.textContent = '▲ Approche seuil';
+        csEl.style.cssText = 'background:rgba(227,147,58,.15);color:#e3933a;border-radius:4px;padding:.1rem .4rem;';
+      } else {
+        csEl.textContent = '✓ Conforme';
+        csEl.style.cssText = 'background:rgba(63,185,80,.12);color:#3fb950;border-radius:4px;padding:.1rem .4rem;';
+      }
+    }
+  });
+}
+
+function renderAlerts(d) {
+  const list   = document.getElementById('alertList');
+  const alerts = d.alerts || [];
+  const n      = d.n_alerts || {};
+
+  // Compteurs
+  ['Crit','Warn','Info'].forEach(k => {
+    const el  = document.getElementById('cnt' + k);
+    const key = k.toUpperCase();
+    const fullKey = key === 'CRIT' ? 'CRITICAL' : key;
+    const cnt  = n[fullKey] || 0;
+    el.style.display = cnt > 0 ? '' : 'none';
+    el.textContent   = `${cnt} ${fullKey}`;
+  });
+
+  if (!alerts.length) {
+    list.innerHTML = '<div class="no-alerts">✅ Aucune alerte préventive — qualité de source conforme sur 24h (NM 03.7.001)</div>';
+    return;
+  }
+
+  const icons = { CRITICAL: '🚨', WARNING: '⚠️', INFO: 'ℹ️' };
+  list.innerHTML = alerts.map(a => `
+    <div class="alert-item alert-${a.level}">
+      <div class="alert-icon">${icons[a.level] || '•'}</div>
+      <div class="alert-body">
+        <div class="alert-msg">${a.message}</div>
+        <div class="alert-detail">${a.detail}</div>
+        ${a.risk ? `<div class="alert-risk">💡 Risque inféré : ${a.risk}</div>` : ''}
+        <div class="alert-hour">h+${String(a.hour_onset).padStart(2,'0')} · ${a.feature} · ${a.norm_ref || ''}</div>
+      </div>
+      <span class="alert-badge badge-${a.level.toLowerCase()}">${a.level}</span>
+    </div>`).join('');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// TOAST
+// ════════════════════════════════════════════════════════════════════════════
+let _toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  connectWS();
+});
+</script>
+</body>
+</html>
