@@ -17,6 +17,8 @@ Usage
     python prediction/5_dashboard.py
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import sys
 import tkinter as tk
