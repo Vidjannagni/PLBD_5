@@ -177,8 +177,23 @@ except Exception as e:
 
 _active_model_key: str = _models_report[0]["model_key"] if _models_report else "unknown"
 
-# ── Buffer historique (alimenté par chaque lecture capteur) ───────────────────
-_history: deque = deque(maxlen=HISTORY_MAXLEN)
+# ── Buffers ──────────────────────────────────────────────────────────────────
+# Buffer brut : accumule les mesures entre deux échantillonnages horaires.
+# Toutes les mesures du diagnostic temps réel (5s) y entrent.
+_raw_buffer: list[dict] = []
+
+# Buffer horaire : 24 médianes horaires pour alimenter le LSTM.
+# Une entrée = la médiane des mesures des 5 dernières minutes, stockée 1×/heure.
+_hourly_buffer: deque = deque(maxlen=HISTORY_MAXLEN)
+
+# Timestamp du dernier échantillonnage horaire
+_last_hourly_sample: float = 0.0
+
+# Intervalle entre deux échantillonnages horaires (secondes)
+HOURLY_INTERVAL: float = 3600.0
+
+# Fenêtre de mesures pour calculer la médiane (secondes)
+MEDIAN_WINDOW: float = 300.0
 
 # ── Connexions WebSocket actives ─────────────────────────────────────────────
 _ws_clients: list[WebSocket] = []
@@ -259,6 +274,46 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info("Client WebSocket déconnecté (total: %d)", len(_ws_clients))
 
 
+def _update_buffers(raw_values: dict) -> None:
+    """
+    Gère les deux niveaux de buffer :
+    1. Accumule chaque mesure dans _raw_buffer (5s)
+    2. Toutes les HOURLY_INTERVAL secondes, calcule la médiane des
+       MEDIAN_WINDOW dernières secondes et l'ajoute à _hourly_buffer
+    """
+    global _last_hourly_sample
+
+    now = time.time()
+    entry = {f: raw_values.get(f, 0.0) for f in FORECAST_FEATURES_FULL}
+    entry["_ts"] = now
+    _raw_buffer.append(entry)
+
+    elapsed = now - _last_hourly_sample
+    if elapsed >= HOURLY_INTERVAL:
+        # Filtrer les mesures des MEDIAN_WINDOW dernières secondes
+        cutoff = now - MEDIAN_WINDOW
+        recent = [e for e in _raw_buffer if e["_ts"] >= cutoff]
+
+        if recent:
+            median_entry = {}
+            for f in FORECAST_FEATURES_FULL:
+                values = [e[f] for e in recent]
+                values.sort()
+                n = len(values)
+                median_entry[f] = values[n // 2] if n % 2 == 1 else (values[n // 2 - 1] + values[n // 2]) / 2
+            _hourly_buffer.append(median_entry)
+            logger.info(
+                "Buffer horaire : médiane de %d mesures stockée (%d/24 échantillons)",
+                len(recent), len(_hourly_buffer),
+            )
+        else:
+            _hourly_buffer.append(entry)
+
+        _last_hourly_sample = now
+        # Purger le buffer brut (garder seulement la fenêtre de médiane)
+        _raw_buffer[:] = [e for e in _raw_buffer if e["_ts"] >= cutoff]
+
+
 def _run_diagnostic() -> dict:
     """Exécute une lecture capteurs + inférence et retourne le résultat JSON."""
     if pipeline is None:
@@ -277,26 +332,17 @@ def _run_diagnostic() -> dict:
 
     result = pipeline.run_once()
 
-    # Stocker les 5 features (diagnostic + température) pour alimenter le LSTM
-    _history.append({f: result["raw_values"].get(f, 0.0) for f in FORECAST_FEATURES_FULL})
+    # Accumuler les mesures dans le buffer brut pour la médiane horaire
+    _update_buffers(result["raw_values"])
 
-    # Recommandations de filtration basées sur les valeurs capteurs
-    filter_reco = []
+    # Décision de filtration basée sur les valeurs capteurs
+    filter_decision = None
     if filter_controller is not None:
         try:
-            decisions = filter_controller.decide_filters(result["raw_values"])
-            from src.filter_controller import FILTER_CONFIG
-            for fid, reason in decisions:
-                cfg = FILTER_CONFIG.get(fid, {})
-                filter_reco.append({
-                    "filter_id":   fid,
-                    "filter_name": cfg.get("name", f"Filtre {fid}"),
-                    "description": cfg.get("desc", ""),
-                    "color":       cfg.get("color", "#666"),
-                    "reason":      reason,
-                })
+            decision = filter_controller.decide(result, shap_summary=shap_summary)
+            filter_decision = decision.to_dict()
         except Exception as e:
-            logger.error("Erreur filtration : %s", e)
+            logger.error("Erreur décision filtration : %s", e)
 
     # Sauvegarder le diagnostic en base
     try:
@@ -304,7 +350,7 @@ def _run_diagnostic() -> dict:
     except Exception as e:
         logger.error("Erreur sauvegarde diagnostic : %s", e)
 
-    return {**result, "type": "diagnostic", "filter_recommendations": filter_reco}
+    return {**result, "type": "diagnostic", "filter_decision": filter_decision}
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -327,20 +373,21 @@ async def get_forecast(request: Request):
     try:
         from prediction.model import FEATURES as FC_FEATURES, HORIZON, WINDOW_SIZE
 
-        # ── Construire la séquence d'entrée (5 features) ────────────────
-        if len(_history) >= WINDOW_SIZE:
+        # ── Construire la séquence d'entrée (24 médianes horaires) ────
+        if len(_hourly_buffer) >= WINDOW_SIZE:
             history_arr = np.array(
                 [[h.get(f, 0.0) for f in FC_FEATURES]
-                 for h in list(_history)[-WINDOW_SIZE:]],
+                 for h in list(_hourly_buffer)[-WINDOW_SIZE:]],
                 dtype=np.float32,
             )
         else:
+            hours_remaining = WINDOW_SIZE - len(_hourly_buffer)
             return JSONResponse(
                 status_code=503,
                 content={
-                    "error": f"Buffer insuffisant : {len(_history)}/{WINDOW_SIZE} mesures. "
-                             f"Attendez {WINDOW_SIZE - len(_history)} lectures supplémentaires.",
-                    "buffer_size": len(_history),
+                    "error": f"Buffer horaire insuffisant : {len(_hourly_buffer)}/{WINDOW_SIZE} échantillons. "
+                             f"Encore ~{hours_remaining}h de mesures nécessaires.",
+                    "buffer_size": len(_hourly_buffer),
                     "required": WINDOW_SIZE,
                 },
             )
@@ -385,7 +432,7 @@ async def get_forecast(request: Request):
             },
             "inference_ms":   round(elapsed_ms, 2),
             "timestamp":      _now(),
-            "buffer_size":    len(_history),
+            "buffer_size":    len(_hourly_buffer),
         }
 
         try:
@@ -432,7 +479,8 @@ async def get_status(request: Request):
     return {
         **_STATUS,
         "ws_clients":     len(_ws_clients),
-        "history_size":   len(_history),
+        "hourly_buffer_size": len(_hourly_buffer),
+        "raw_buffer_size":   len(_raw_buffer),
         "refresh_s":      REFRESH_S,
         "active_model":   _active_model_key,
         "timestamp":      _now(),
@@ -563,24 +611,21 @@ async def activate_filters(request: Request):
 
     result = pipeline.run_once()
 
-    if result["potability_now"] == 0:
-        return {
-            "message":  "Eau potable — aucune filtration nécessaire.",
-            "actions":  [],
-            "timestamp": _now(),
-        }
+    decision, action = filter_controller.decide_and_activate(
+        result, shap_summary=shap_summary,
+    )
 
-    actions = filter_controller.decide_and_activate(result)
-
-    try:
-        save_filtration([a.to_dict() for a in actions])
-    except Exception as e:
-        logger.error("Erreur sauvegarde filtration : %s", e)
+    if action is not None:
+        try:
+            save_filtration([action.to_dict()])
+        except Exception as e:
+            logger.error("Erreur sauvegarde filtration : %s", e)
 
     return {
-        "message":   f"{len(actions)} filtre(s) activé(s).",
-        "actions":   [a.to_dict() for a in actions],
-        "timestamp": _now(),
+        "decision":       decision.to_dict(),
+        "action":         action.to_dict() if action else None,
+        "message":        decision.reason,
+        "timestamp":      _now(),
     }
 
 

@@ -1,27 +1,32 @@
 """
 filter_controller.py
 =====================
-Contrôle automatique des pompes de filtration à partir des résultats
-du diagnostic immédiat.
+Contrôle des pompes de filtration à partir des résultats du diagnostic.
+
+Architecture physique
+----------------------
+    Bassine (source) ← capteurs (pH, turbidité, conductivité/TDS, température)
+    Pompe 1 → Filtre à sédiments        (particules grossières)
+    Pompe 2 → Filtre à charbon compressé (micro-particules fines)
+    Pompe 3 → Filtre à charbon actif     (adsorption chimique/organique)
+
+    Chaque pompe est indépendante — on active UN SEUL filtre par cycle
+    (celui qui est le plus adapté au problème détecté).
 
 Mapping GPIO (BCM)
 -------------------
-    Pompe 1 → PIN 23 → Filtre à sédiments       (turbidité élevée)
-    Pompe 2 → PIN 24 → Filtre à charbon compressé (minéralisation élevée)
-    Pompe 3 → PIN 25 → Filtre à charbon actif    (risque chimique/organique)
+    Pompe 1 → PIN 23
+    Pompe 2 → PIN 24
+    Pompe 3 → PIN 25
 
-Mode mock
-----------
-Si le module RPi.GPIO n'est pas disponible (PC de développement),
-toutes les activations sont simulées — aucun import de GPIO requis.
-
-Usage
-------
-    from filter_controller import FilterController
-
-    ctrl = FilterController()
-    actions = ctrl.decide_and_activate(diagnostic_result)
-    # actions = liste des filtres activés avec durée et raison
+Logique de décision (par priorité décroissante)
+-------------------------------------------------
+    P1  Turbidité > 5 NTU               → Sédiments
+    P2  pH hors [6.5, 8.5] ou contexte  → Charbon actif
+    P3  Turbidité 2–5 NTU               → Charbon compressé
+    P4  Non potable sans règle P1–P3    → Charbon actif (défaut) + explication
+    --  Conductivité élevée             → Recommandation opérateur (pas de pompe)
+    --  Tout conforme                   → Aucune action
 """
 
 from __future__ import annotations
@@ -56,29 +61,32 @@ FILTER_CONFIG: dict[int, dict] = {
     2: {
         "pin":    24,
         "name":   "Filtre à charbon compressé",
-        "desc":   "Élimine métaux lourds, forte minéralisation",
+        "desc":   "Micro-filtration fine, certains métaux lourds, kystes parasitaires",
         "color":  "#1C7293",
     },
     3: {
         "pin":    25,
         "name":   "Filtre à charbon actif",
-        "desc":   "Adsorption chlore, pesticides, composés organiques",
+        "desc":   "Adsorption chlore, pesticides, composés organiques, goût/odeur",
         "color":  "#02C39A",
     },
 }
 
-# Durée par défaut d'activation d'une pompe (secondes)
 DEFAULT_PUMP_DURATION: float = 5.0
 
 # Seuils de décision (NM 03.7.001)
 THRESHOLDS = {
-    "turbidity_high":    5.0,    # NTU — seuil filtre sédiments
-    "tds_moderate_low":  500.0,  # mg/L
-    "tds_moderate_high": 700.0,  # mg/L — zone charbon compressé
+    "turbidity_high":       5.0,     # NTU — seuil filtre sédiments
+    "turbidity_moderate":   2.0,     # NTU — seuil filtre charbon compressé
+    "ph_min":               6.5,
+    "ph_max":               8.5,
+    "conductivity_warning": 1500.0,  # µS/cm — recommandation surveillance
+    "conductivity_critical": 2700.0, # µS/cm — NM 03.7.001 limite max
 }
 
 
-# ── Structure de résultat d'activation ───────────────────────────────────────
+# ── Structures de résultat ───────────────────────────────────────────────────
+
 @dataclass
 class FilterAction:
     """Résultat d'une activation de pompe."""
@@ -104,6 +112,24 @@ class FilterAction:
         }
 
 
+@dataclass
+class FilterDecision:
+    """Résultat complet de la décision de filtration."""
+    filter_to_activate: int | None
+    reason:             str
+    recommendations:    list[dict]
+    potability:         int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "filter_to_activate": self.filter_to_activate,
+            "filter_name":        FILTER_CONFIG[self.filter_to_activate]["name"] if self.filter_to_activate else None,
+            "filter_color":       FILTER_CONFIG[self.filter_to_activate]["color"] if self.filter_to_activate else None,
+            "reason":             self.reason,
+            "recommendations":    self.recommendations,
+        }
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # CONTRÔLEUR
 # ════════════════════════════════════════════════════════════════════════════
@@ -112,15 +138,9 @@ class FilterController:
     """
     Contrôleur des pompes de filtration.
 
-    Gère l'initialisation GPIO, l'activation/désactivation des pompes et
-    la logique de sélection du filtre adapté aux résultats de diagnostic.
-
-    Parameters
-    ----------
-    pump_duration : float
-        Durée d'activation de chaque pompe en secondes (défaut : 5s).
-    mock : bool | None
-        Forcer le mode mock. Si None, détecté automatiquement.
+    Active UN SEUL filtre par cycle — celui qui est le plus adapté au
+    problème détecté. Les recommandations (conductivité, SHAP) sont
+    retournées pour affichage mais ne déclenchent pas de pompe.
     """
 
     def __init__(
@@ -130,12 +150,12 @@ class FilterController:
     ):
         self.pump_duration = pump_duration
         self.mock          = (not _GPIO_AVAILABLE) if mock is None else mock
-        self._lock         = threading.Lock()   # évite deux pompes simultanées
+        self._lock         = threading.Lock()
         self._active_pins: set[int] = set()
 
         if not self.mock:
             self._setup_gpio()
-            atexit.register(self.cleanup)   # nettoyage propre à la fin du processus
+            atexit.register(self.cleanup)
         else:
             logger.info("FilterController initialisé en mode MOCK.")
 
@@ -146,7 +166,7 @@ class FilterController:
         GPIO.setwarnings(False)
         for fid, cfg in FILTER_CONFIG.items():
             GPIO.setup(cfg["pin"], GPIO.OUT)
-            GPIO.output(cfg["pin"], GPIO.LOW)   # s'assurer que tout est éteint
+            GPIO.output(cfg["pin"], GPIO.LOW)
         logger.info("GPIO initialisé — pins %s configurés en sortie.",
                     [c["pin"] for c in FILTER_CONFIG.values()])
 
@@ -172,32 +192,14 @@ class FilterController:
         reason:    str = "",
         duration:  float | None = None,
     ) -> FilterAction:
-        """
-        Active une pompe pendant ``duration`` secondes puis l'éteint.
-
-        L'activation est bloquante (attend la fin de la durée) mais
-        thread-safe via un verrou pour éviter les activations simultanées.
-
-        Parameters
-        ----------
-        filter_id : int
-            Identifiant du filtre (1, 2 ou 3).
-        reason : str
-            Raison de l'activation (pour les logs et l'interface web).
-        duration : float | None
-            Durée d'activation en secondes. Défaut : self.pump_duration.
-
-        Returns
-        -------
-        FilterAction
-        """
+        """Active une pompe pendant ``duration`` secondes puis l'éteint."""
         if filter_id not in FILTER_CONFIG:
             raise ValueError(f"filter_id doit être 1, 2 ou 3 — reçu : {filter_id}")
 
-        cfg      = FILTER_CONFIG[filter_id]
-        pin      = cfg["pin"]
-        dur      = duration if duration is not None else self.pump_duration
-        name     = cfg["name"]
+        cfg  = FILTER_CONFIG[filter_id]
+        pin  = cfg["pin"]
+        dur  = duration if duration is not None else self.pump_duration
+        name = cfg["name"]
         activated = False
 
         with self._lock:
@@ -222,8 +224,8 @@ class FilterController:
                         pass
                     self._active_pins.discard(pin)
 
-                status = "✓ (MOCK)" if self.mock else ("✓ OK" if activated else "✗ ERREUR")
-                logger.info("Pompe %d — %s → arrêtée. %s", filter_id, name, status)
+                status = "OK (MOCK)" if self.mock else ("OK" if activated else "ERREUR")
+                logger.info("Pompe %d — %s — %s", filter_id, name, status)
 
         return FilterAction(
             filter_id   = filter_id,
@@ -235,134 +237,150 @@ class FilterController:
             mock        = self.mock,
         )
 
-    # ── Logique de sélection des filtres ─────────────────────────────────────
+    # ── Logique de décision ──────────────────────────────────────────────────
 
-    def decide_filters(
+    def decide(
         self,
-        raw_values:     dict[str, float],
-        source:         str   = "inconnue",
-        zone_agricole:  bool  = False,
-        historique_odeur: bool = False,
-        eau_chloree:    bool  = False,
-    ) -> list[tuple[int, str]]:
+        diagnostic_result: dict[str, Any],
+        source:            str  = "inconnue",
+        zone_agricole:     bool = False,
+        historique_odeur:  bool = False,
+        eau_chloree:       bool = False,
+        shap_summary:      dict | None = None,
+    ) -> FilterDecision:
         """
-        Détermine quels filtres activer à partir des valeurs capteurs.
-
-        Returns
-        -------
-        list[tuple[int, str]]
-            Liste de (filter_id, raison) à activer, dans l'ordre.
-        """
-        ph           = raw_values.get("ph",           7.0)
-        turbidity    = raw_values.get("Turbidity",    0.0)
-        tds          = raw_values.get("Solids",       0.0)
-        conductivity = raw_values.get("Conductivity", 0.0)
-
-        to_activate: list[tuple[int, str]] = []
-
-        # ── Filtre 1 : Sédiments ─────────────────────────────────────────
-        if turbidity > THRESHOLDS["turbidity_high"]:
-            to_activate.append((
-                1,
-                f"Turbidité élevée ({turbidity:.1f} NTU > seuil NM 5 NTU)"
-            ))
-
-        # ── Filtre 2 : Charbon compressé ─────────────────────────────────
-        if THRESHOLDS["tds_moderate_low"] < tds <= THRESHOLDS["tds_moderate_high"]:
-            to_activate.append((
-                2,
-                f"Minéralisation modérée à élevée (TDS {tds:.0f} mg/L)"
-            ))
-        elif tds > THRESHOLDS["tds_moderate_high"]:
-            to_activate.append((
-                2,
-                f"Forte minéralisation (TDS {tds:.0f} mg/L > 700 mg/L)"
-            ))
-
-        # ── Filtre 3 : Charbon actif ──────────────────────────────────────
-        risque_chimique = (
-            eau_chloree
-            or zone_agricole
-            or historique_odeur
-            or source.lower() in ["réseau", "reseau", "rivière", "riviere", "fleuve"]
-            or not (6.5 <= ph <= 8.5)
-        )
-        if risque_chimique:
-            raisons = []
-            if not (6.5 <= ph <= 8.5):
-                raisons.append(f"pH hors norme ({ph:.2f})")
-            if eau_chloree:
-                raisons.append("eau chlorée")
-            if zone_agricole:
-                raisons.append("zone agricole (risque nitrates)")
-            if historique_odeur:
-                raisons.append("historique d'odeurs")
-            if source.lower() in ["réseau", "reseau", "rivière", "riviere", "fleuve"]:
-                raisons.append(f"source '{source}'")
-            to_activate.append((
-                3,
-                "Risque chimique/organique : " + ", ".join(raisons)
-            ))
-
-        # ── Cas par défaut : eau acceptable, filtration de base ───────────
-        if not to_activate:
-            to_activate.append((2, "Filtration standard (minéralisation normale)"))
-            to_activate.append((3, "Filtration standard (précaution organique)"))
-
-        return to_activate
-
-    # ── Pipeline complet : décision + activation ──────────────────────────────
-
-    def decide_and_activate(
-        self,
-        diagnostic_result:  dict[str, Any],
-        source:             str  = "inconnue",
-        zone_agricole:      bool = False,
-        historique_odeur:   bool = False,
-        eau_chloree:        bool = False,
-        duration:           float | None = None,
-    ) -> list[FilterAction]:
-        """
-        Point d'entrée principal.
-
-        Reçoit le résultat de ``sensor_inference.SensorPipeline.run_once()``
-        et active les pompes appropriées séquentiellement.
+        Détermine LE filtre à activer (un seul) et les recommandations.
 
         Parameters
         ----------
         diagnostic_result : dict
-            Sortie de ``SensorPipeline.run_once()`` (clé ``raw_values``).
+            Sortie de SensorPipeline.run_once().
         source, zone_agricole, historique_odeur, eau_chloree :
-            Contexte supplémentaire (peut être fourni via l'interface web).
-        duration : float | None
-            Durée d'activation (override de pump_duration).
+            Contexte opérateur (peut être fourni via l'interface web).
+        shap_summary : dict | None
+            Résumé SHAP (feature_ranking, mean_abs_shap) pour expliquer
+            les décisions quand aucune règle à seuil ne se déclenche.
 
         Returns
         -------
-        list[FilterAction]
-            Actions effectuées (une par filtre activé).
+        FilterDecision
         """
-        raw_values = diagnostic_result.get("raw_values", {})
-        if not raw_values:
-            logger.warning("decide_and_activate : raw_values vide — aucune action.")
-            return []
+        raw        = diagnostic_result.get("raw_values", {})
+        potability = diagnostic_result.get("potability_now")
 
-        filters_to_run = self.decide_filters(
-            raw_values      = raw_values,
-            source          = source,
-            zone_agricole   = zone_agricole,
-            historique_odeur= historique_odeur,
-            eau_chloree     = eau_chloree,
+        ph           = raw.get("ph", 7.0)
+        turbidity    = raw.get("Turbidity", 0.0)
+        conductivity = raw.get("Conductivity", 0.0)
+
+        recommendations: list[dict] = []
+        filter_id:  int | None = None
+        reason:     str = ""
+
+        # ── Recommandations conductivité (pas de pompe) ──────────────────
+        if conductivity > THRESHOLDS["conductivity_critical"]:
+            recommendations.append({
+                "level":   "critical",
+                "message": f"Minéralisation excessive ({conductivity:.0f} µS/cm > {THRESHOLDS['conductivity_critical']:.0f} µS/cm NM)",
+                "detail":  "Aucun filtre disponible ne traite la minéralisation. "
+                           "Traitement par osmose inverse ou changement de source recommandé.",
+            })
+        elif conductivity > THRESHOLDS["conductivity_warning"]:
+            recommendations.append({
+                "level":   "warning",
+                "message": f"Minéralisation élevée ({conductivity:.0f} µS/cm)",
+                "detail":  "Surveillance renforcée de la source recommandée. "
+                           "Risque de dépassement du seuil NM 03.7.001 (2700 µS/cm).",
+            })
+
+        # ── Eau potable → pas de filtration ──────────────────────────────
+        if potability == 0:
+            return FilterDecision(
+                filter_to_activate=None,
+                reason="Eau potable — aucune filtration nécessaire.",
+                recommendations=recommendations,
+                potability=potability,
+            )
+
+        # ── P1 : Turbidité haute → Sédiments ────────────────────────────
+        if turbidity > THRESHOLDS["turbidity_high"]:
+            filter_id = 1
+            reason = f"Turbidité élevée ({turbidity:.1f} NTU > seuil NM {THRESHOLDS['turbidity_high']:.0f} NTU)"
+
+        # ── P2 : pH hors norme ou contexte chimique → Charbon actif ─────
+        elif (not (THRESHOLDS["ph_min"] <= ph <= THRESHOLDS["ph_max"])
+              or eau_chloree or zone_agricole or historique_odeur
+              or source.lower() in ["réseau", "reseau", "rivière", "riviere", "fleuve"]):
+
+            filter_id = 3
+            raisons = []
+            if not (THRESHOLDS["ph_min"] <= ph <= THRESHOLDS["ph_max"]):
+                raisons.append(f"pH hors norme ({ph:.2f})")
+            if eau_chloree:
+                raisons.append("eau chlorée")
+            if zone_agricole:
+                raisons.append("zone agricole (risque pesticides/nitrates)")
+            if historique_odeur:
+                raisons.append("historique d'odeurs")
+            if source.lower() in ["réseau", "reseau", "rivière", "riviere", "fleuve"]:
+                raisons.append(f"source '{source}'")
+            reason = "Risque chimique/organique : " + ", ".join(raisons)
+
+        # ── P3 : Turbidité modérée → Charbon compressé ──────────────────
+        elif turbidity > THRESHOLDS["turbidity_moderate"]:
+            filter_id = 2
+            reason = f"Turbidité modérée ({turbidity:.1f} NTU) — micro-filtration fine recommandée"
+
+        # ── P4 : Non potable sans règle P1–P3 → Charbon actif (défaut) ──
+        else:
+            filter_id = 3
+            reason = "Eau non potable (combinaison de paramètres) — charbon actif par précaution"
+
+            # Enrichir avec SHAP si disponible
+            if shap_summary and "feature_ranking" in shap_summary:
+                top_feature = shap_summary["feature_ranking"][0]
+                shap_vals = shap_summary.get("mean_abs_shap", {})
+                top_val = shap_vals.get(top_feature, 0)
+                recommendations.append({
+                    "level":   "info",
+                    "message": f"Le capteur le plus influent est « {top_feature} » (SHAP = {top_val:.4f})",
+                    "detail":  "Aucun paramètre individuel ne dépasse un seuil critique, "
+                               "mais la combinaison des mesures est jugée à risque par le modèle. "
+                               "Un prélèvement pour analyse en laboratoire est recommandé.",
+                })
+
+        return FilterDecision(
+            filter_to_activate=filter_id,
+            reason=reason,
+            recommendations=recommendations,
+            potability=potability,
         )
 
-        actions = []
-        for fid, reason in filters_to_run:
-            action = self.activate_pump(fid, reason=reason, duration=duration)
-            actions.append(action)
+    # ── Pipeline complet : décision + activation ─────────────────────────────
 
-        logger.info(
-            "Filtration terminée : %d filtre(s) activé(s) → %s",
-            len(actions),
-            [a.filter_name for a in actions],
-        )
-        return actions
+    def decide_and_activate(
+        self,
+        diagnostic_result: dict[str, Any],
+        duration:          float | None = None,
+        **context,
+    ) -> tuple[FilterDecision, FilterAction | None]:
+        """
+        Point d'entrée principal : décide puis active la pompe si nécessaire.
+
+        Returns
+        -------
+        tuple[FilterDecision, FilterAction | None]
+        """
+        decision = self.decide(diagnostic_result, **context)
+
+        action = None
+        if decision.filter_to_activate is not None:
+            action = self.activate_pump(
+                decision.filter_to_activate,
+                reason=decision.reason,
+                duration=duration,
+            )
+            logger.info("Filtration : %s", decision.reason)
+        else:
+            logger.info("Pas de filtration : %s", decision.reason)
+
+        return decision, action

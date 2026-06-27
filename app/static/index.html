@@ -242,6 +242,7 @@
     }
     .filter-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 3px; flex-shrink: 0; }
     .filter-ok   { background: var(--green); }
+    .filter-crit { background: var(--red); }
     .filter-warn { background: var(--orange); }
     .filter-info { background: var(--teal); }
     .filter-title { font-weight: 600; color: var(--text); }
@@ -990,37 +991,70 @@ function updateDiagnostic(data) {
   document.getElementById('inferTime').textContent =
     'Inférence : ' + (data.inference_time_ms || 0).toFixed(1) + ' ms';
 
-  // Recommandations filtration (depuis le FilterController backend)
-  updateFilterReco(data.filter_recommendations || [], data.potability_now);
+  // Décision de filtration (depuis le FilterController backend)
+  updateFilterDecision(data.filter_decision, data.potability_now);
 }
 
-function updateFilterReco(recommendations, potabilityNow) {
+function updateFilterDecision(decision, potabilityNow) {
   const list = document.getElementById('filterList');
   const btn  = document.getElementById('btnActivate');
 
-  if (!recommendations || recommendations.length === 0) {
-    list.innerHTML = `
+  if (!decision || decision.filter_to_activate === null) {
+    // Eau potable ou pas de décision
+    let html = `
       <li class="filter-item">
         <div class="filter-dot filter-ok"></div>
         <div>
-          <div class="filter-title">Aucune action requise</div>
-          <div class="filter-desc">Tous les paramètres sont conformes à la norme NM 03.7.001.</div>
+          <div class="filter-title">${decision ? decision.reason : 'En attente de données capteurs'}</div>
+          <div class="filter-desc">Aucune filtration nécessaire.</div>
         </div>
       </li>`;
+
+    // Recommandations conductivité (même si eau potable)
+    if (decision && decision.recommendations) {
+      decision.recommendations.forEach(r => {
+        const dotCls = r.level === 'critical' ? 'filter-crit' : (r.level === 'warning' ? 'filter-warn' : 'filter-info');
+        html += `<li class="filter-item">
+          <div class="filter-dot ${dotCls}"></div>
+          <div>
+            <div class="filter-title">${r.message}</div>
+            <div class="filter-desc">${r.detail}</div>
+          </div>
+        </li>`;
+      });
+    }
+
+    list.innerHTML = html;
     btn.style.display = 'none';
     return;
   }
 
-  list.innerHTML = recommendations.map(r => `
+  // Eau non potable — filtre recommandé
+  let html = `
     <li class="filter-item">
-      <div class="filter-dot" style="background:${r.color || 'var(--orange)'}"></div>
+      <div class="filter-dot" style="background:${decision.filter_color || 'var(--orange)'}"></div>
       <div>
-        <div class="filter-title">${r.filter_name}</div>
-        <div class="filter-desc">${r.reason}</div>
+        <div class="filter-title">${decision.filter_name}</div>
+        <div class="filter-desc">${decision.reason}</div>
       </div>
-    </li>`).join('');
+    </li>`;
 
-  btn.style.display = (potabilityNow === 1 && userRole === 'administrator') ? '' : 'none';
+  // Recommandations supplémentaires (conductivité, SHAP)
+  if (decision.recommendations) {
+    decision.recommendations.forEach(r => {
+      const dotCls = r.level === 'critical' ? 'filter-crit' : (r.level === 'warning' ? 'filter-warn' : 'filter-info');
+      html += `<li class="filter-item">
+        <div class="filter-dot ${dotCls}"></div>
+        <div>
+          <div class="filter-title">${r.message}</div>
+          <div class="filter-desc">${r.detail}</div>
+        </div>
+      </li>`;
+    });
+  }
+
+  list.innerHTML = html;
+  btn.style.display = (userRole === 'administrator') ? '' : 'none';
 }
 
 async function activateFilters() {
@@ -1037,9 +1071,9 @@ async function activateFilters() {
       status.style.color = 'var(--red)';
       status.textContent = d.error;
     } else {
-      const names = (d.actions || []).map(a => a.filter_name).join(', ');
+      const actionName = d.action ? d.action.filter_name : '';
       status.style.color = 'var(--mint)';
-      status.textContent = d.message + (names ? ' (' + names + ')' : '');
+      status.textContent = d.message + (actionName ? ' → ' + actionName : '');
     }
   } catch(e) {
     status.style.color = 'var(--red)';
