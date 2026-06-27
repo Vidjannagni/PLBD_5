@@ -7,8 +7,8 @@ Pipeline temps réel : lecture des capteurs → diagnostic immédiat
 Flux
 -----
     ADS1115 (I2C)
-        ├── A0 → TDS       → Solids [mg/L]
-        ├── A1 → pH        → ph [0–14]
+        ├── A1 → TDS       → Solids [mg/L]
+        ├── A2 → pH        → ph [0–14]
         └── A3 → Turbidité → Turbidity [NTU]
 
     DS18B20 (1-Wire, GPIO 4)
@@ -77,7 +77,7 @@ except ImportError:
         "Solids":       (0.0,  10000.0),
         "Conductivity": (0.0,  15000.0),
         "Turbidity":    (0.0,  1000.0),
-        "Temperature":  (-10.0, 85.0),
+        "Temperature":  (-10.0, 100.0),
     }
     TDS_EC_FACTOR = 0.67
 
@@ -221,9 +221,9 @@ class ADS1115Reader:
         self._ads = _ADS.ADS1115(i2c)
         self._ads.gain = gain
         self._n       = n_samples
-        self._ch_tds  = AnalogIn(self._ads, 0)
-        self._ch_ph   = AnalogIn(self._ads, 1)
-        self._ch_turb = AnalogIn(self._ads, 3)
+        self._ch_tds  = AnalogIn(self._ads, 1)   # A1 → TDS
+        self._ch_ph   = AnalogIn(self._ads, 2)   # A2 → pH
+        self._ch_turb = AnalogIn(self._ads, 3)   # A3 → Turbidité
 
         if _DS18B20_FILE is None:
             raise RuntimeError("DS18B20 non détecté. Vérifiez le câblage sur GPIO 4.")
