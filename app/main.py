@@ -32,8 +32,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 # ── Résolution des chemins ───────────────────────────────────────────────────
@@ -62,9 +62,10 @@ NM_STANDARDS    : dict  = {      # NM 03.7.001 — seuils marocains
     "Solids":       {"min": 0,    "max": 1500,   "unit": "mg/L"},
     "Conductivity": {"min": 0,    "max": 2700,   "unit": "µS/cm"},
     "Turbidity":    {"min": 0,    "max": 5,      "unit": "NTU"},
-    "temperature":  {"min": 0,    "max": 25,     "unit": "°C"},
+    "Temperature":  {"min": 0,    "max": 25,     "unit": "°C"},
 }
 DIAG_FEATURES   : list  = ["ph", "Solids", "Conductivity", "Turbidity"]
+FORECAST_FEATURES_FULL : list = ["ph", "Solids", "Conductivity", "Turbidity", "Temperature"]
 
 # ── Chargement des modules IA (avec fallback gracieux) ────────────────────────
 _STATUS: dict[str, Any] = {
@@ -103,17 +104,46 @@ try:
 except Exception as e:
     _STATUS["errors"].append(f"AlertEngine : {e}")
 
+filter_controller = None
 try:
-    import joblib, torch
-    from prediction.model import LSTMModel, FEATURES as FORECAST_FEATURES, HORIZON, WINDOW_SIZE
-    lstm_model = LSTMModel()
-    lstm_model.load_state_dict(
-        torch.load(PRED_DIR / "models/lstm_model.pth", map_location="cpu")
-    )
-    lstm_model.eval()
-    lstm_scaler  = joblib.load(PRED_DIR / "data/scaler.joblib")
-    _STATUS["forecast_model"] = True
-    logger.info("Modèle LSTM chargé (fenêtre=%dh, horizon=%dh)", WINDOW_SIZE, HORIZON)
+    from src.filter_controller import FilterController
+    filter_controller = FilterController(mock=_STATUS.get("mock_mode", True))
+    _STATUS["filter_controller"] = True
+    logger.info("FilterController chargé (mock=%s)", filter_controller.mock)
+except Exception as e:
+    _STATUS["filter_controller"] = False
+    _STATUS["errors"].append(f"FilterController : {e}")
+    logger.warning("FilterController non disponible : %s", e)
+
+_lstm_backend = None   # "torch" ou "onnx"
+
+try:
+    import joblib
+    from prediction.model import FEATURES as FORECAST_FEATURES, HORIZON, WINDOW_SIZE
+
+    lstm_scaler = joblib.load(PRED_DIR / "data/scaler.joblib")
+
+    # Priorité 1 : ONNX Runtime (léger, compatible ARM64 Pi)
+    onnx_path = PRED_DIR / "models/lstm_model.onnx"
+    if onnx_path.exists():
+        import onnxruntime as ort
+        lstm_model = ort.InferenceSession(str(onnx_path))
+        _lstm_backend = "onnx"
+        _STATUS["forecast_model"] = True
+        logger.info("LSTM chargé via ONNX Runtime (fenêtre=%dh, horizon=%dh)", WINDOW_SIZE, HORIZON)
+    else:
+        # Priorité 2 : PyTorch (PC de développement)
+        import torch
+        from prediction.model import LSTMModel
+        lstm_model = LSTMModel()
+        lstm_model.load_state_dict(
+            torch.load(PRED_DIR / "models/lstm_model.pth", map_location="cpu")
+        )
+        lstm_model.eval()
+        _lstm_backend = "torch"
+        _STATUS["forecast_model"] = True
+        logger.info("LSTM chargé via PyTorch (fenêtre=%dh, horizon=%dh)", WINDOW_SIZE, HORIZON)
+
 except Exception as e:
     _STATUS["errors"].append(f"LSTM : {e}")
     logger.warning("Modèle LSTM non disponible : %s", e)
@@ -128,6 +158,25 @@ try:
 except Exception as e:
     _STATUS["errors"].append(f"SHAP : {e}")
 
+# ── Rapport d'évaluation des modèles ─────────────────────────────────────────
+_models_report: list[dict] = []
+_models_dir = ROOT / "outputs" / "models"
+try:
+    import pandas as _pd
+    _eval_path = ROOT / "outputs" / "reports" / "evaluation_report.csv"
+    if _eval_path.exists():
+        _df = _pd.read_csv(_eval_path)
+        _cols = ["model_key", "rank", "composite_score", "roc_auc_test",
+                 "gmean_test", "f1_test", "recall_test", "precision_test",
+                 "accuracy_test", "mcc_test", "pr_auc_test", "threshold"]
+        _cols = [c for c in _cols if c in _df.columns]
+        _models_report = _df[_cols].to_dict(orient="records")
+        logger.info("Rapport d'évaluation chargé : %d modèles", len(_models_report))
+except Exception as e:
+    logger.warning("Rapport d'évaluation non disponible : %s", e)
+
+_active_model_key: str = _models_report[0]["model_key"] if _models_report else "unknown"
+
 # ── Buffer historique (alimenté par chaque lecture capteur) ───────────────────
 _history: deque = deque(maxlen=HISTORY_MAXLEN)
 
@@ -135,22 +184,47 @@ _history: deque = deque(maxlen=HISTORY_MAXLEN)
 _ws_clients: list[WebSocket] = []
 
 # ── Application FastAPI ───────────────────────────────────────────────────────
+from app.auth import router as auth_router, get_current_user, require_admin
+from app.database import (
+    initialize_database,
+    save_diagnostic,
+    save_filtration,
+    save_forecast,
+    get_history_diagnostic,
+    get_history_filtration,
+    get_history_forecast,
+)
+
 app = FastAPI(
     title="AQUA-SENS",
     description="Système intelligent de diagnostic et de prévision de la qualité de l'eau",
     version="1.0.0",
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(auth_router)
+
+
+@app.on_event("startup")
+def startup():
+    initialize_database()
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # PAGE PRINCIPALE
 # ════════════════════════════════════════════════════════════════════════════
 
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    return HTMLResponse(content=(STATIC_DIR / "login.html").read_text(encoding="utf-8"))
+
+
 @app.get("/", response_class=HTMLResponse)
-async def root():
-    html_path = STATIC_DIR / "index.html"
-    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+async def root(request: Request):
+    try:
+        get_current_user(request)
+    except Exception:
+        return RedirectResponse("/login", status_code=302)
+    return HTMLResponse(content=(STATIC_DIR / "index.html").read_text(encoding="utf-8"))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -159,6 +233,15 @@ async def root():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    token = websocket.cookies.get("access_token")
+    if not token:
+        await websocket.close(code=4001, reason="Non authentifié")
+        return
+    from app.security import decode_access_token
+    if decode_access_token(token) is None:
+        await websocket.close(code=4001, reason="Session expirée")
+        return
+
     await websocket.accept()
     _ws_clients.append(websocket)
     logger.info("Client WebSocket connecté (total: %d)", len(_ws_clients))
@@ -194,10 +277,34 @@ def _run_diagnostic() -> dict:
 
     result = pipeline.run_once()
 
-    # Stocker dans le buffer pour alimenter le LSTM
-    _history.append({f: result["raw_values"].get(f, 0.0) for f in DIAG_FEATURES})
+    # Stocker les 5 features (diagnostic + température) pour alimenter le LSTM
+    _history.append({f: result["raw_values"].get(f, 0.0) for f in FORECAST_FEATURES_FULL})
 
-    return {**result, "type": "diagnostic"}
+    # Recommandations de filtration basées sur les valeurs capteurs
+    filter_reco = []
+    if filter_controller is not None:
+        try:
+            decisions = filter_controller.decide_filters(result["raw_values"])
+            from src.filter_controller import FILTER_CONFIG
+            for fid, reason in decisions:
+                cfg = FILTER_CONFIG.get(fid, {})
+                filter_reco.append({
+                    "filter_id":   fid,
+                    "filter_name": cfg.get("name", f"Filtre {fid}"),
+                    "description": cfg.get("desc", ""),
+                    "color":       cfg.get("color", "#666"),
+                    "reason":      reason,
+                })
+        except Exception as e:
+            logger.error("Erreur filtration : %s", e)
+
+    # Sauvegarder le diagnostic en base
+    try:
+        save_diagnostic(result)
+    except Exception as e:
+        logger.error("Erreur sauvegarde diagnostic : %s", e)
+
+    return {**result, "type": "diagnostic", "filter_recommendations": filter_reco}
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -205,7 +312,11 @@ def _run_diagnostic() -> dict:
 # ════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/forecast")
-async def get_forecast():
+async def get_forecast(request: Request):
+    try:
+        get_current_user(request)
+    except Exception:
+        return JSONResponse(status_code=401, content={"error": "Non authentifié"})
     if lstm_model is None or lstm_scaler is None:
         return JSONResponse(
             status_code=503,
@@ -214,36 +325,40 @@ async def get_forecast():
         )
 
     try:
-        import torch
         from prediction.model import FEATURES as FC_FEATURES, HORIZON, WINDOW_SIZE
 
-        # ── Construire la séquence d'entrée ──────────────────────────────
+        # ── Construire la séquence d'entrée (5 features) ────────────────
         if len(_history) >= WINDOW_SIZE:
             history_arr = np.array(
-                [[h.get(f, 0.0) for f in FC_FEATURES if f in h or True]
+                [[h.get(f, 0.0) for f in FC_FEATURES]
                  for h in list(_history)[-WINDOW_SIZE:]],
                 dtype=np.float32,
             )
-            # S'assurer qu'on a bien N_FEATURES colonnes (ajouter temp=0 si absente)
-            if history_arr.shape[1] < len(FC_FEATURES):
-                pad = np.zeros((WINDOW_SIZE, len(FC_FEATURES) - history_arr.shape[1]),
-                                dtype=np.float32)
-                history_arr = np.hstack([history_arr, pad])
         else:
-            # Buffer pas encore plein : générer un historique par défaut
-            rng = np.random.default_rng(42)
-            means = [7.2, 18500, 420, 3.8, 22.0]
-            history_arr = np.array(
-                [means for _ in range(WINDOW_SIZE)], dtype=np.float32
-            ) + rng.normal(0, 0.01, (WINDOW_SIZE, len(FC_FEATURES))).astype(np.float32)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": f"Buffer insuffisant : {len(_history)}/{WINDOW_SIZE} mesures. "
+                             f"Attendez {WINDOW_SIZE - len(_history)} lectures supplémentaires.",
+                    "buffer_size": len(_history),
+                    "required": WINDOW_SIZE,
+                },
+            )
 
-        # ── Inférence LSTM ───────────────────────────────────────────────
+        # ── Inférence LSTM (ONNX ou PyTorch) ────────────────────────────
         t0     = time.perf_counter()
         scaled = lstm_scaler.transform(history_arr)
-        x      = torch.FloatTensor(scaled).unsqueeze(0)
-        with torch.no_grad():
-            y_scaled = lstm_model(x).squeeze(0).numpy()   # (HORIZON, N_FEATURES)
-        predicted = lstm_scaler.inverse_transform(y_scaled)  # (HORIZON, N_FEATURES)
+
+        if _lstm_backend == "onnx":
+            x = scaled.reshape(1, WINDOW_SIZE, len(FC_FEATURES)).astype(np.float32)
+            y_scaled = lstm_model.run(None, {"input": x})[0].squeeze(0)
+        else:
+            import torch
+            x = torch.FloatTensor(scaled).unsqueeze(0)
+            with torch.no_grad():
+                y_scaled = lstm_model(x).squeeze(0).numpy()
+
+        predicted = lstm_scaler.inverse_transform(y_scaled)
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
         # ── Alertes ──────────────────────────────────────────────────────
@@ -258,7 +373,7 @@ async def get_forecast():
             feat: [round(float(predicted[h, j]), 4) for h in range(HORIZON)]
             for j, feat in enumerate(FC_FEATURES)
         }
-        return {
+        response_data = {
             "features":       FC_FEATURES,
             "hours":          list(range(1, HORIZON + 1)),
             "predictions":    predictions,
@@ -273,6 +388,13 @@ async def get_forecast():
             "buffer_size":    len(_history),
         }
 
+        try:
+            save_forecast(response_data)
+        except Exception as e:
+            logger.error("Erreur sauvegarde prévision : %s", e)
+
+        return response_data
+
     except Exception as e:
         logger.error("Erreur prévision : %s", e)
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -283,7 +405,11 @@ async def get_forecast():
 # ════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/shap")
-async def get_shap():
+async def get_shap(request: Request):
+    try:
+        get_current_user(request)
+    except Exception:
+        return JSONResponse(status_code=401, content={"error": "Non authentifié"})
     if shap_summary is None:
         return JSONResponse(
             status_code=503,
@@ -298,13 +424,163 @@ async def get_shap():
 # ════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/status")
-async def get_status():
+async def get_status(request: Request):
+    try:
+        get_current_user(request)
+    except Exception:
+        return JSONResponse(status_code=401, content={"error": "Non authentifié"})
     return {
         **_STATUS,
         "ws_clients":     len(_ws_clients),
         "history_size":   len(_history),
         "refresh_s":      REFRESH_S,
+        "active_model":   _active_model_key,
         "timestamp":      _now(),
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# REST — Modèles IA
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/models")
+async def get_models(request: Request):
+    try:
+        get_current_user(request)
+    except Exception:
+        return JSONResponse(status_code=401, content={"error": "Non authentifié"})
+    return {
+        "active_model": _active_model_key,
+        "models": _models_report,
+    }
+
+
+@app.post("/api/models/select/{model_key}")
+async def select_model(model_key: str, request: Request):
+    global pipeline, _active_model_key
+    try:
+        require_admin(request)
+    except Exception:
+        return JSONResponse(status_code=403, content={"error": "Accès réservé aux administrateurs"})
+
+    valid_keys = [m["model_key"] for m in _models_report]
+    if model_key not in valid_keys:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Modèle '{model_key}' introuvable. Disponibles : {valid_keys}"},
+        )
+
+    rank = next(m["rank"] for m in _models_report if m["model_key"] == model_key)
+    model_file = _models_dir / f"model_{rank}_{model_key}.joblib"
+    if not model_file.exists():
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Fichier {model_file.name} introuvable sur disque."},
+        )
+
+    try:
+        import joblib
+        from src.sensor_inference import get_sensor_reader
+        from config import DEFAULT_THRESHOLD
+
+        model = joblib.load(model_file)
+        scaler = joblib.load(_models_dir / "scaler.joblib")
+
+        if hasattr(model, "threshold"):
+            model.threshold = DEFAULT_THRESHOLD
+
+        from src.sensor_inference import SensorPipeline
+        pipeline = SensorPipeline(model, scaler,
+                                  sensor_reader=get_sensor_reader(mock=_STATUS.get("mock_mode", True)))
+        _active_model_key = model_key
+
+        logger.info("Modèle actif changé → %s (rank=%d, seuil=%.2f)",
+                    model_key, rank, getattr(model, "threshold", 0.5))
+
+        return {
+            "message": f"Modèle actif : {model_key} (rank #{rank})",
+            "active_model": model_key,
+            "threshold": getattr(model, "threshold", 0.5),
+        }
+    except Exception as e:
+        logger.error("Erreur changement de modèle : %s", e)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# REST — Historiques
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/history/diagnostic")
+async def api_history_diagnostic(request: Request, limit: int = 100):
+    try:
+        get_current_user(request)
+    except Exception:
+        return JSONResponse(status_code=401, content={"error": "Non authentifié"})
+    return get_history_diagnostic(limit)
+
+
+@app.get("/api/history/filtration")
+async def api_history_filtration(request: Request, limit: int = 100):
+    try:
+        get_current_user(request)
+    except Exception:
+        return JSONResponse(status_code=401, content={"error": "Non authentifié"})
+    return get_history_filtration(limit)
+
+
+@app.get("/api/history/forecast")
+async def api_history_forecast(request: Request, limit: int = 50):
+    try:
+        get_current_user(request)
+    except Exception:
+        return JSONResponse(status_code=401, content={"error": "Non authentifié"})
+    return get_history_forecast(limit)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# REST — Activation manuelle des filtres
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/filter/activate")
+async def activate_filters(request: Request):
+    try:
+        require_admin(request)
+    except Exception:
+        return JSONResponse(status_code=403, content={"error": "Accès réservé aux administrateurs"})
+
+    if filter_controller is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "FilterController non disponible."},
+        )
+
+    if pipeline is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Pipeline de diagnostic non disponible."},
+        )
+
+    result = pipeline.run_once()
+
+    if result["potability_now"] == 0:
+        return {
+            "message":  "Eau potable — aucune filtration nécessaire.",
+            "actions":  [],
+            "timestamp": _now(),
+        }
+
+    actions = filter_controller.decide_and_activate(result)
+
+    try:
+        save_filtration([a.to_dict() for a in actions])
+    except Exception as e:
+        logger.error("Erreur sauvegarde filtration : %s", e)
+
+    return {
+        "message":   f"{len(actions)} filtre(s) activé(s).",
+        "actions":   [a.to_dict() for a in actions],
+        "timestamp": _now(),
     }
 
 
