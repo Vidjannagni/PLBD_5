@@ -177,7 +177,7 @@ except Exception as e:
 
 _default_model = _models_report[0]["model_key"] if _models_report else "unknown"
 try:
-    _active_model_key: str = get_config("active_model", _default_model)
+    _active_model_key: str = get_config("active_model", _default_model)  # noqa: F821
 except Exception:
     _active_model_key: str = _default_model
 
