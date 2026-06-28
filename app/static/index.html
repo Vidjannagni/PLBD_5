@@ -667,6 +667,27 @@
       </div>
     </div>
 
+    <!-- Configuration (admin uniquement) -->
+    <div class="card" style="margin-top:1rem;display:none" id="adminConfigCard">
+      <div class="card-title">Configuration du système</div>
+      <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:flex-end">
+        <div class="field" style="margin:0;min-width:160px">
+          <label for="cfgPumpDur" style="font-size:.7rem">Durée filtration (secondes)</label>
+          <input id="cfgPumpDur" type="number" min="10" max="1800" value="300"
+                 style="padding:.5rem .7rem;font-size:.82rem">
+        </div>
+        <div class="field" style="margin:0;min-width:160px">
+          <label for="cfgRefresh" style="font-size:.7rem">Intervalle diagnostic (secondes)</label>
+          <input id="cfgRefresh" type="number" min="1" max="60" value="5"
+                 style="padding:.5rem .7rem;font-size:.82rem">
+        </div>
+        <button class="btn btn-primary" onclick="saveConfig()" style="padding:.5rem 1rem;font-size:.82rem">
+          Enregistrer
+        </button>
+      </div>
+      <div id="configStatus" style="font-size:.78rem;color:var(--text-muted);margin-top:.4rem"></div>
+    </div>
+
     <!-- Gestion des utilisateurs (admin uniquement) -->
     <div class="card" style="margin-top:1rem;display:none" id="adminUsersCard">
       <div class="card-title">Gestion des utilisateurs</div>
@@ -1086,9 +1107,18 @@ function updateDiagnostic(data) {
   } else if (label === 'Non potable') {
     badge.className = 'potability-badge badge-nonpotable';
     badge.textContent = '🚨 Non potable';
+  } else if (label === 'Non fiable') {
+    badge.className = 'potability-badge badge-unknown';
+    badge.textContent = '⚠ Non fiable';
   } else {
     badge.className = 'potability-badge badge-unknown';
     badge.textContent = label;
+  }
+
+  // Erreurs capteurs
+  const errors = data.sensor_errors || [];
+  if (errors.length > 0) {
+    showToast('Capteur(s) invalide(s) : ' + errors.join(', '));
   }
 
   // Confiance
@@ -1829,6 +1859,47 @@ async function selectModel(key) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// CONFIGURATION (admin)
+// ════════════════════════════════════════════════════════════════════════════
+async function loadConfig() {
+  if (userRole !== 'administrator') return;
+  document.getElementById('adminConfigCard').style.display = '';
+  try {
+    const r = await fetch('/api/config');
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('cfgPumpDur').value = d.pump_duration_s || 300;
+    document.getElementById('cfgRefresh').value = d.refresh_interval_s || 5;
+  } catch(_) {}
+}
+
+async function saveConfig() {
+  const status = document.getElementById('configStatus');
+  const pump   = parseFloat(document.getElementById('cfgPumpDur').value);
+  const refresh = parseFloat(document.getElementById('cfgRefresh').value);
+  status.textContent = '';
+
+  try {
+    const r = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pump_duration_s: pump, refresh_interval_s: refresh }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      status.style.color = 'var(--mint)';
+      status.textContent = d.message;
+    } else {
+      status.style.color = 'var(--red)';
+      status.textContent = d.error || 'Erreur.';
+    }
+  } catch(e) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Erreur réseau.';
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // GESTION UTILISATEURS (admin)
 // ════════════════════════════════════════════════════════════════════════════
 async function loadUsers() {
@@ -1935,6 +2006,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadUserRole().then(() => {
     loadModels();
     loadSystemStatus();
+    loadConfig();
     loadUsers();
   });
   connectWS();
