@@ -219,6 +219,12 @@
     .sensor-value { font-size: 1.8rem; font-weight: 700; color: var(--text); font-family: 'JetBrains Mono'; margin: .3rem 0; line-height: 1; }
     .sensor-unit  { font-size: .75rem; color: var(--text-muted); }
     .sensor-norm  { font-size: .68rem; margin-top: .4rem; padding: .15rem .5rem; border-radius: 1rem; }
+    .sensor-status-dot {
+      position: absolute; top: 8px; right: 8px;
+      width: 8px; height: 8px; border-radius: 50%;
+    }
+    .dot-ok    { background: var(--green); }
+    .dot-error { background: var(--red); animation: pulse 1.5s infinite; }
     .norm-ok      { background: rgba(63,185,80,.15); color: var(--green); }
     .norm-warn    { background: rgba(227,147,58,.15);  color: var(--orange); }
     .norm-crit    { background: rgba(248,81,73,.15);  color: var(--red); }
@@ -521,6 +527,30 @@
     }
     #toast.show { transform: none; opacity: 1; }
 
+    /* ── A propos ────────────────────────────────────────────────────── */
+    .about-section { margin-bottom: 1.5rem; }
+    .about-section h3 {
+      font-size: .9rem; font-weight: 600; color: var(--mint);
+      margin-bottom: .5rem; text-transform: uppercase; letter-spacing: .04em;
+    }
+    .about-section p { font-size: .85rem; color: var(--text-muted); line-height: 1.5; }
+    .about-arch { display: flex; flex-direction: column; gap: .6rem; }
+    .about-arch-item {
+      display: flex; gap: .75rem; align-items: flex-start;
+      padding: .6rem .8rem; background: var(--bg3); border-radius: 6px;
+    }
+    .about-arch-item strong { color: var(--text); font-size: .85rem; }
+    .about-arch-item p { font-size: .78rem; color: var(--text-muted); margin-top: .2rem; }
+    .about-arch-icon {
+      width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center; font-size: 1.1rem;
+    }
+    .about-tech-grid { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
+    .about-tech-tag {
+      padding: .25rem .6rem; background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 1rem; font-size: .75rem; color: var(--text-muted);
+    }
+
     /* ── Bandeau alerte ──────────────────────────────────────────────── */
     .alert-banner {
       position: fixed; top: 0; left: 0; right: 0;
@@ -577,6 +607,7 @@
   <button class="tab-btn"        onclick="switchTab('diagnostic', this)">Diagnostic temps réel</button>
   <button class="tab-btn"        onclick="switchTab('forecast', this)">Prévision 24h &amp; Alertes</button>
   <button class="tab-btn"        onclick="switchTab('history', this)">Historiques</button>
+  <button class="tab-btn"        onclick="switchTab('about', this)">A propos</button>
 </div>
 
 <!-- ── Main ───────────────────────────────────────────────────────────────── -->
@@ -786,6 +817,12 @@
         </div>
       </div>
 
+      <!-- Graphique temps reel glissant -->
+      <div class="card" style="grid-column:1/-1">
+        <div class="card-title">Evolution temps reel des capteurs</div>
+        <div class="charts-grid" id="realtimeChartsGrid"></div>
+      </div>
+
       <!-- SHAP -->
       <div class="card">
         <div class="card-title">Importance des capteurs (SHAP)</div>
@@ -956,6 +993,97 @@
 
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- A PROPOS                                                            -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div class="tab-panel" id="panel-about">
+
+    <div class="card" style="max-width:800px;margin:0 auto">
+      <div style="text-align:center;margin-bottom:1.5rem">
+        <div class="logo-icon" style="width:64px;height:64px;font-size:1.8rem;margin:0 auto .75rem;background:var(--mint);border-radius:50%;display:flex;align-items:center;justify-content:center">💧</div>
+        <h1 style="font-size:1.5rem;font-weight:700;color:#fff;margin-bottom:.3rem">AQUA-SENS</h1>
+        <p style="color:var(--text-muted);font-size:.9rem">Systeme intelligent de surveillance et de traitement de la qualite de l'eau</p>
+      </div>
+
+      <div class="about-section">
+        <h3>Contexte</h3>
+        <p>Projet de fin d'etudes realise a l'Ecole Centrale Casablanca. AQUA-SENS vise a fournir un outil de triage bas cout de la potabilite de l'eau, adapte aux contextes a ressources limitees — zones rurales, points d'eau sans infrastructure de laboratoire.</p>
+      </div>
+
+      <div class="about-section">
+        <h3>Architecture du systeme</h3>
+        <div class="about-arch">
+          <div class="about-arch-item">
+            <div class="about-arch-icon" style="background:var(--ocean)">📡</div>
+            <div>
+              <strong>Capteurs</strong>
+              <p>pH Meter V1.1, Gravity TDS Meter V1.0 (conductivite + TDS), TSW-20M (turbidite), DS18B20 (temperature)</p>
+            </div>
+          </div>
+          <div class="about-arch-item">
+            <div class="about-arch-icon" style="background:var(--teal)">🧠</div>
+            <div>
+              <strong>IA embarquee</strong>
+              <p>Diagnostic (CatBoost/RF/XGBoost) + Prevision 24h (LSTM PyTorch) sur Raspberry Pi 4</p>
+            </div>
+          </div>
+          <div class="about-arch-item">
+            <div class="about-arch-icon" style="background:var(--mint)">🔧</div>
+            <div>
+              <strong>Filtration</strong>
+              <p>3 pompes GPIO independantes : sediments, charbon compresse, charbon actif</p>
+            </div>
+          </div>
+          <div class="about-arch-item">
+            <div class="about-arch-icon" style="background:#7B2D8B">📊</div>
+            <div>
+              <strong>Interface web</strong>
+              <p>FastAPI + WebSocket, diagnostic temps reel, previsions, alertes NM 03.7.001, historiques</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="about-section">
+        <h3>Norme de reference</h3>
+        <p><strong>NM 03.7.001</strong> — Norme marocaine pour l'eau destinee a la consommation humaine (IMANOR).</p>
+        <table class="data-table" style="margin-top:.5rem">
+          <thead><tr><th>Parametre</th><th>Min</th><th>Max</th><th>Unite</th></tr></thead>
+          <tbody>
+            <tr><td>pH</td><td>6.5</td><td>8.5</td><td>—</td></tr>
+            <tr><td>TDS</td><td>—</td><td>1500</td><td>mg/L</td></tr>
+            <tr><td>Conductivite</td><td>—</td><td>2700</td><td>uS/cm</td></tr>
+            <tr><td>Turbidite</td><td>—</td><td>5</td><td>NTU</td></tr>
+            <tr><td>Temperature</td><td>—</td><td>25</td><td>C</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="about-section">
+        <h3>Technologies</h3>
+        <div class="about-tech-grid">
+          <span class="about-tech-tag">Raspberry Pi 4</span>
+          <span class="about-tech-tag">Python 3.9</span>
+          <span class="about-tech-tag">scikit-learn</span>
+          <span class="about-tech-tag">CatBoost</span>
+          <span class="about-tech-tag">PyTorch</span>
+          <span class="about-tech-tag">SHAP</span>
+          <span class="about-tech-tag">FastAPI</span>
+          <span class="about-tech-tag">WebSocket</span>
+          <span class="about-tech-tag">Chart.js</span>
+          <span class="about-tech-tag">SQLite</span>
+          <span class="about-tech-tag">RPi.GPIO</span>
+          <span class="about-tech-tag">ADS1115</span>
+        </div>
+      </div>
+
+      <div style="text-align:center;margin-top:1.5rem;color:var(--text-muted);font-size:.78rem">
+        Ecole Centrale Casablanca — PLBD — 2026
+      </div>
+    </div>
+
+  </div>
+
 </main>
 
 <!-- Bandeau alerte eau non potable -->
@@ -1115,8 +1243,21 @@ function updateDiagnostic(data) {
     badge.textContent = label;
   }
 
-  // Erreurs capteurs
+  // Indicateurs capteurs (pastilles)
   const errors = data.sensor_errors || [];
+  const errorFeats = new Set(errors.map(e => e.split(' ')[0]));
+  ['ph', 'Solids', 'Conductivity', 'Turbidity', 'Temperature'].forEach(feat => {
+    const card = document.getElementById('card-' + feat);
+    if (!card) return;
+    let dot = card.querySelector('.sensor-status-dot');
+    if (!dot) {
+      dot = document.createElement('div');
+      dot.className = 'sensor-status-dot';
+      card.appendChild(dot);
+    }
+    dot.className = 'sensor-status-dot ' + (errorFeats.has(feat) ? 'dot-error' : 'dot-ok');
+    dot.title = errorFeats.has(feat) ? 'Capteur invalide' : 'Capteur OK';
+  });
   if (errors.length > 0) {
     showToast('Capteur(s) invalide(s) : ' + errors.join(', '));
   }
@@ -1133,6 +1274,9 @@ function updateDiagnostic(data) {
   document.getElementById('threshVal').textContent = 'Seuil : ' + (thresh * 100).toFixed(0) + '%';
   document.getElementById('inferTime').textContent =
     'Inférence : ' + (data.inference_time_ms || 0).toFixed(1) + ' ms';
+
+  // Graphique temps reel
+  updateRealtimeCharts(raw, data.timestamp);
 
   // Notification eau non potable
   handlePotabilityAlert(label);
@@ -1531,6 +1675,91 @@ function showToast(msg) {
 // ════════════════════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// GRAPHIQUE TEMPS REEL GLISSANT
+// ════════════════════════════════════════════════════════════════════════════
+const _realtimeData = { labels: [], ph: [], Solids: [], Conductivity: [], Turbidity: [], Temperature: [] };
+const _rtCharts = {};
+const RT_MAX_POINTS = 60;
+
+function updateRealtimeCharts(raw, timestamp) {
+  const t = (timestamp || '').replace('T', ' ').slice(11, 19) || new Date().toLocaleTimeString();
+  _realtimeData.labels.push(t);
+  ['ph', 'Solids', 'Conductivity', 'Turbidity', 'Temperature'].forEach(f => {
+    _realtimeData[f].push(raw[f] || 0);
+  });
+
+  if (_realtimeData.labels.length > RT_MAX_POINTS) {
+    _realtimeData.labels.shift();
+    ['ph', 'Solids', 'Conductivity', 'Turbidity', 'Temperature'].forEach(f => _realtimeData[f].shift());
+  }
+
+  const grid = document.getElementById('realtimeChartsGrid');
+  const params = [
+    { key: 'ph', label: 'pH', color: '#2E86AB' },
+    { key: 'Solids', label: 'TDS (mg/L)', color: '#E84855' },
+    { key: 'Conductivity', label: 'Cond. (uS/cm)', color: '#3BB273' },
+    { key: 'Turbidity', label: 'Turb. (NTU)', color: '#F18F01' },
+    { key: 'Temperature', label: 'Temp. (C)', color: '#7B2D8B' },
+  ];
+
+  if (grid.children.length !== params.length) {
+    grid.innerHTML = '';
+    params.forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'chart-card';
+      div.innerHTML = `<div class="chart-header"><span class="chart-feat">${p.label}</span></div>
+        <canvas id="rt-${p.key}" class="chart-canvas"></canvas>`;
+      grid.appendChild(div);
+    });
+  }
+
+  params.forEach(p => {
+    const ctx = document.getElementById('rt-' + p.key);
+    if (!ctx) return;
+
+    if (_rtCharts[p.key]) {
+      _rtCharts[p.key].data.labels = _realtimeData.labels;
+      _rtCharts[p.key].data.datasets[0].data = _realtimeData[p.key];
+      _rtCharts[p.key].update('none');
+    } else {
+      const nm = NM[p.key];
+      const datasets = [{
+        label: p.label,
+        data: _realtimeData[p.key],
+        borderColor: p.color,
+        backgroundColor: p.color + '18',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: true,
+      }];
+      if (nm) datasets.push({
+        label: 'Limite NM',
+        data: _realtimeData[p.key].map(() => nm.max),
+        borderColor: '#3fb95044',
+        borderDash: [4, 4],
+        borderWidth: 1,
+        pointRadius: 0,
+        fill: false,
+      });
+      _rtCharts[p.key] = new Chart(ctx, {
+        type: 'line',
+        data: { labels: _realtimeData.labels, datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#8b949e', font: { size: 7 }, maxTicksLimit: 6 }, grid: { color: '#21262d' } },
+            y: { ticks: { color: '#8b949e', font: { size: 8 } }, grid: { color: '#21262d' } },
+          },
+        },
+      });
+    }
+  });
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // NOTIFICATION EAU NON POTABLE
 // ════════════════════════════════════════════════════════════════════════════
