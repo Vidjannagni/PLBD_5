@@ -261,7 +261,7 @@ GRID_SEARCH = {
     # Nombre de folds internes pour le GridSearchCV
     "cv_splits": 5,
 
-    # Métrique optimisée par GridSearchCV : gmean 
+    # Métrique optimisée par GridSearchCV : gmean
     "scoring": GMEAN_SCORER,
 
     # Nombre de jobs parallèles (-1 = tous les cœurs disponibles)

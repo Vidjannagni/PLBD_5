@@ -1,0 +1,54 @@
+name: Deploy to Raspberry Pi
+
+on:
+  workflow_dispatch:
+    inputs:
+      restart_server:
+        description: "Redémarrer le serveur uvicorn après déploiement"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+jobs:
+  deploy:
+    name: Deploy to Pi
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PI_HOST }}
+          username: ${{ secrets.PI_USER }}
+          key: ${{ secrets.PI_SSH_KEY }}
+          port: ${{ secrets.PI_PORT || 22 }}
+          script: |
+            cd ~/PLBD_5
+            echo "=== Git pull ==="
+            git pull origin main
+
+            echo "=== Install dependencies ==="
+            source .venv/bin/activate 2>/dev/null || true
+            pip install -r requirements-pi.txt --quiet
+            pip install "bcrypt==4.0.1" --quiet
+
+            if [ "${{ inputs.restart_server }}" = "true" ]; then
+              echo "=== Restart server ==="
+              pkill -f "uvicorn app.main:app" 2>/dev/null || true
+              sleep 2
+              nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/aquasens.log 2>&1 &
+              sleep 3
+              if pgrep -f "uvicorn app.main:app" > /dev/null; then
+                echo "Server restarted OK"
+              else
+                echo "ERROR: Server failed to start"
+                tail -20 /tmp/aquasens.log
+                exit 1
+              fi
+            fi
+
+            echo "=== Deploy complete ==="

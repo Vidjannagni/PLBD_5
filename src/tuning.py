@@ -636,7 +636,7 @@ def print_tuning_report(best_params: dict) -> None:
         print(f"     G-mean CV   : {info['gmean_cv']:.5f}")
         print(f"     Seuil opt.  : {info.get('threshold', 0.5):.2f}")
         print(f"     Fit time    : {info['fit_time_s']:.1f}s")
-        print(f"     Best params :")
+        print("     Best params :")
         for k, v in info["params"].items():
             print(f"       {k:<25} = {v}")
 

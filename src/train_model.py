@@ -383,7 +383,7 @@ def train_and_evaluate(
         logger.info("\n[%s] Entraînement sur le train set complet…", key.upper())
         logger.info("  Seuil intégré au modèle : %.3f  (ThresholdClassifier)", threshold if best_params_thresholds and key in (best_params_thresholds or {}) else 0.5)
 
-        
+
         # Entraînement final — emballer dans ThresholdClassifier
         # Le seuil est intégré au modèle : predict() l'utilisera automatiquement
         # en production après joblib.load(), sans configuration supplémentaire.
@@ -637,7 +637,7 @@ def plot_feature_importance(
         sorted_names = [feature_names[i] for i in indices]
         sorted_imps  = imps[indices]
 
-        bars = ax.barh(sorted_names[::-1], sorted_imps[::-1], color=color, edgecolor="white")
+        ax.barh(sorted_names[::-1], sorted_imps[::-1], color=color, edgecolor="white")
         ax.set_title(key.upper(), fontsize=11, fontweight="bold")
         ax.set_xlabel("Importance", fontsize=10)
 

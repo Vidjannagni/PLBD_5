@@ -99,7 +99,7 @@ if diag_model_path and diag_scaler_path and diag_scaler_path.exists():
         y_class_true  = diag_model.predict(X_true_scaled)
 
         accuracy = (y_class_pred == y_class_true).mean()
-        print(f"\n  Potabilité t+24h :")
+        print("\n  Potabilité t+24h :")
         print(f"    Accuracy (prédit vs réel)  : {accuracy:.3f}")
         print(f"    Non potable prédit (%)     : {y_class_pred.mean()*100:.1f}%")
         print(f"    Non potable réel (%)       : {y_class_true.mean()*100:.1f}%")

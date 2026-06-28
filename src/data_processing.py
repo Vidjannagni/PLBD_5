@@ -755,6 +755,6 @@ if __name__ == "__main__":
     print(f"Classes y : {dict(y.value_counts().sort_index())}")
 
     X_train, X_test, y_train, y_test, scaler = preprocess_for_ml(X, y)
-    print(f"\n--- Prétraitement ML ---")
+    print("\n--- Prétraitement ML ---")
     print(f"X_train : {X_train.shape} | X_test : {X_test.shape}")
     print(f"Scaler  : {scaler}")
