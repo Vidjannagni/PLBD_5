@@ -640,6 +640,42 @@
       </div>
     </div>
 
+    <!-- Gestion des utilisateurs (admin uniquement) -->
+    <div class="card" style="margin-top:1rem;display:none" id="adminUsersCard">
+      <div class="card-title">Gestion des utilisateurs</div>
+      <div class="table-wrap">
+        <table class="data-table" id="tableUsers">
+          <thead>
+            <tr><th>ID</th><th>Utilisateur</th><th>Rôle</th><th></th></tr>
+          </thead>
+          <tbody id="tbodyUsers">
+            <tr><td colspan="4" class="empty-msg">Chargement…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="margin-top:.75rem;display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+        <div class="field" style="margin:0;flex:1;min-width:120px">
+          <label for="newUsername" style="font-size:.7rem">Utilisateur</label>
+          <input id="newUsername" type="text" placeholder="Nom" style="padding:.5rem .7rem;font-size:.82rem">
+        </div>
+        <div class="field" style="margin:0;flex:1;min-width:120px">
+          <label for="newPassword" style="font-size:.7rem">Mot de passe</label>
+          <input id="newPassword" type="password" placeholder="Mot de passe" style="padding:.5rem .7rem;font-size:.82rem">
+        </div>
+        <div class="field" style="margin:0;min-width:120px">
+          <label for="newRole" style="font-size:.7rem">Rôle</label>
+          <select id="newRole" style="padding:.5rem .7rem;font-size:.82rem;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);width:100%">
+            <option value="operator">Opérateur</option>
+            <option value="administrator">Administrateur</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="adminCreateUser()" style="padding:.5rem 1rem;font-size:.82rem;white-space:nowrap">
+          Ajouter
+        </button>
+      </div>
+      <div id="adminUserStatus" style="font-size:.78rem;color:var(--text-muted);margin-top:.4rem"></div>
+    </div>
+
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -1576,6 +1612,90 @@ async function selectModel(key) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// GESTION UTILISATEURS (admin)
+// ════════════════════════════════════════════════════════════════════════════
+async function loadUsers() {
+  if (userRole !== 'administrator') return;
+  document.getElementById('adminUsersCard').style.display = '';
+  try {
+    const r = await fetch('/api/users');
+    if (!r.ok) return;
+    const users = await r.json();
+    const tbody = document.getElementById('tbodyUsers');
+    tbody.innerHTML = users.map(u => {
+      const roleBadge = u.role === 'administrator'
+        ? '<span style="color:var(--mint);font-weight:600">Admin</span>'
+        : '<span style="color:var(--text-muted)">Opérateur</span>';
+      const delBtn = u.username === 'admin' ? ''
+        : `<button class="btn-select" onclick="adminDeleteUser('${u.username}')">Supprimer</button>`;
+      return `<tr>
+        <td>${u.id}</td>
+        <td>${u.username}</td>
+        <td>${roleBadge}</td>
+        <td>${delBtn}</td>
+      </tr>`;
+    }).join('');
+  } catch(_) {}
+}
+
+async function adminCreateUser() {
+  const status = document.getElementById('adminUserStatus');
+  const username = document.getElementById('newUsername').value.trim();
+  const password = document.getElementById('newPassword').value;
+  const role     = document.getElementById('newRole').value;
+  status.textContent = '';
+
+  if (!username || !password) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Nom et mot de passe requis.';
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, role }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      status.style.color = 'var(--mint)';
+      status.textContent = d.message;
+      document.getElementById('newUsername').value = '';
+      document.getElementById('newPassword').value = '';
+      loadUsers();
+    } else {
+      status.style.color = 'var(--red)';
+      status.textContent = d.detail || 'Erreur.';
+    }
+  } catch(e) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Erreur réseau.';
+  }
+}
+
+async function adminDeleteUser(username) {
+  const status = document.getElementById('adminUserStatus');
+  if (!confirm('Supprimer l\'utilisateur "' + username + '" ?')) return;
+
+  try {
+    const r = await fetch('/api/users/' + username, { method: 'DELETE' });
+    const d = await r.json();
+    if (r.ok) {
+      status.style.color = 'var(--mint)';
+      status.textContent = d.message;
+      loadUsers();
+    } else {
+      status.style.color = 'var(--red)';
+      status.textContent = d.detail || 'Erreur.';
+    }
+  } catch(e) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Erreur réseau.';
+  }
+}
+
 async function loadSystemStatus() {
   try {
     const r = await fetch('/api/status');
@@ -1599,6 +1719,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadUserRole().then(() => {
     loadModels();
     loadSystemStatus();
+    loadUsers();
   });
   connectWS();
 });
