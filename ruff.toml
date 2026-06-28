@@ -1,0 +1,17 @@
+# Ruff — linter Python rapide
+# https://docs.astral.sh/ruff/
+
+target-version = "py39"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",   # line too long (géré par le formatage)
+    "F401",   # imported but unused (imports conditionnels fréquents)
+    "E402",   # module level import not at top (sys.path inserts)
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["E711", "E712"]
+"prediction/*" = ["E402"]

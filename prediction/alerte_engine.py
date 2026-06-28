@@ -595,7 +595,7 @@ class AlertEngine:
         n_info = sum(1 for a in alerts if a.level == AlertLevel.INFO)
 
         lines = [
-            f"━━━ RAPPORT D'ALERTES PRÉVENTIVES (horizon 24h) ━━━",
+            "━━━ RAPPORT D'ALERTES PRÉVENTIVES (horizon 24h) ━━━",
             f"🚨 CRITICAL : {n_crit}  ⚠️ WARNING : {n_warn}  ℹ️ INFO : {n_info}",
             "",
         ]

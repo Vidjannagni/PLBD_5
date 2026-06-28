@@ -148,5 +148,5 @@ df = pd.DataFrame({
 df.to_csv(BASE / "data/dataset.csv", index=False)
 
 print(f"✅ Dataset : {len(df)} points sur {N_JOURS} jours (intervalle {FREQ_MINUTES} min)")
-print(f"\nStatistiques :")
+print("\nStatistiques :")
 print(df[["ph", "Solids", "Conductivity", "Turbidity", "Temperature"]].describe().round(2))
