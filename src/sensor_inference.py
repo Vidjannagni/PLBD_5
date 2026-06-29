@@ -462,16 +462,20 @@ class SensorPipeline:
         if out_of_bounds:
             logger.warning("Valeurs hors bornes : %s", out_of_bounds)
 
-        # Détection capteur invalide (déconnecté ou saturé)
-        SATURATION_VALUES = {"Turbidity": 4550.0, "Conductivity": 0.0, "Solids": 0.0}
-        for f in FEATURES:
-            v = raw.get(f, 0.0)
-            if v == 0.0 and f != "ph":
-                sensor_errors.append(f"{f} = 0 (capteur déconnecté ?)")
-            elif f in SATURATION_VALUES and v >= SATURATION_VALUES[f] and SATURATION_VALUES[f] > 0:
-                sensor_errors.append(f"{f} = {v} (capteur saturé / hors eau ?)")
-        if raw.get("Temperature", 0.0) == 0.0:
-            sensor_errors.append("Temperature = 0 (capteur déconnecté ?)")
+        # Détection capteur déconnecté : seuls Conductivity/Solids dérivent
+        # d'une formule qui vaut exactement 0 si et seulement si la tension
+        # ADS1115 est à 0V (fil flottant). De l'eau réelle a toujours une
+        # conductivité résiduelle non nulle — 0.0 exact est donc un signal
+        # fiable de sonde déconnectée.
+        # pH (jamais 0 par formule), Turbidity (0 NTU = eau la plus claire
+        # possible, valeur légitime) et Temperature (0°C physiquement valide)
+        # sont exclus de cette vérification.
+        for f in ("Conductivity", "Solids"):
+            if raw.get(f, 0.0) == 0.0:
+                sensor_errors.append(f"{f} = 0 (capteur TDS déconnecté ?)")
+
+        if raw.get("Turbidity", 0.0) >= 4550.0:
+            sensor_errors.append("Turbidity = 4550 NTU (capteur hors eau ou déconnecté ?)")
 
         # Inférence diagnostic — température exclue (réservée au modèle de prédiction)
         x        = np.array([[raw[f] for f in FEATURES]])
