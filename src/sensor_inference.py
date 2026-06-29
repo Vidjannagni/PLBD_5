@@ -241,34 +241,40 @@ class ADS1115Reader:
         if _DS18B20_FILE is None:
             raise RuntimeError("DS18B20 non détecté. Vérifiez le câblage sur GPIO 4.")
 
-    def _stable_voltage(self, channel, threshold: float) -> tuple:
+    def _stable_voltage(self, channel, threshold: float, name: str) -> tuple:
         """
-        Lit le canal jusqu'à stabilisation ou timeout.
+        Lit le canal jusqu'à stabilisation ou timeout. Capture les pannes
+        matérielles (I2C déconnecté, bus saturé) sans crasher le pipeline.
 
         Returns
         -------
-        tuple (voltage_moyen, is_stable, n_lectures)
+        tuple (voltage_moyen, is_stable, error_msg | None)
         """
         readings = []
         t0 = time.time()
 
         while True:
-            readings.append(channel.voltage)
+            try:
+                readings.append(channel.voltage)
+            except Exception as e:
+                logger.error("Erreur lecture capteur %s : %s", name, e)
+                return 0.0, False, f"{name} : échec de lecture I2C ({e})"
 
             if len(readings) >= self._n:
                 window = readings[-self._n:]
                 std = float(np.std(window))
                 if std <= threshold:
-                    return float(np.mean(window)), True, len(readings)
+                    return float(np.mean(window)), True, None
 
             if time.time() - t0 > STABILITY_TIMEOUT:
                 window = readings[-self._n:] if len(readings) >= self._n else readings
+                msg = f"{name} : non stabilisé après {STABILITY_TIMEOUT:.0f}s"
                 logger.warning(
-                    "Stabilisation timeout (%.1fs, %d lectures, std=%.4f > seuil=%.4f)",
-                    STABILITY_TIMEOUT, len(readings),
+                    "Stabilisation timeout %s (%.1fs, %d lectures, std=%.4f > seuil=%.4f)",
+                    name, STABILITY_TIMEOUT, len(readings),
                     float(np.std(window)), threshold,
                 )
-                return float(np.mean(window)), False, len(readings)
+                return float(np.mean(window)), False, msg
 
             time.sleep(STABILITY_INTERVAL)
 
@@ -276,26 +282,41 @@ class ADS1115Reader:
         """
         Lit les capteurs en attendant la stabilisation de chacun.
 
-        Retourne les 5 mesures + métadonnées de stabilité.
+        Retourne les 5 mesures + la liste des erreurs/instabilités
+        sous la clé ``_sensor_errors`` (capteur déconnecté, timeout,
+        échec de lecture I2C ou 1-Wire).
         """
-        v_tds, tds_stable, _ = self._stable_voltage(
-            self._ch_tds, STABILITY_THRESHOLD.get("Conductivity", 10.0) / 100
+        errors: list[str] = []
+
+        v_tds, tds_stable, err = self._stable_voltage(
+            self._ch_tds, STABILITY_THRESHOLD.get("Conductivity", 10.0) / 100, "TDS"
         )
-        v_ph, ph_stable, _ = self._stable_voltage(
-            self._ch_ph, STABILITY_THRESHOLD.get("ph", 0.05) / 3.5
+        if err:
+            errors.append(err)
+
+        v_ph, ph_stable, err = self._stable_voltage(
+            self._ch_ph, STABILITY_THRESHOLD.get("ph", 0.05) / 3.5, "pH"
         )
-        v_turb, turb_stable, _ = self._stable_voltage(
-            self._ch_turb, STABILITY_THRESHOLD.get("Turbidity", 0.3) / 100
+        if err:
+            errors.append(err)
+
+        v_turb, turb_stable, err = self._stable_voltage(
+            self._ch_turb, STABILITY_THRESHOLD.get("Turbidity", 0.3) / 100, "Turbidité"
         )
-        temp = read_temperature_mean(_DS18B20_FILE, self._n)
+        if err:
+            errors.append(err)
+
+        try:
+            temp = read_temperature_mean(_DS18B20_FILE, self._n)
+        except Exception as e:
+            logger.error("Erreur lecture DS18B20 : %s", e)
+            temp = 0.0
+            errors.append(f"Temperature : échec de lecture 1-Wire ({e})")
 
         ec = voltage_to_conductivity(v_tds)
 
-        all_stable = tds_stable and ph_stable and turb_stable
-        if all_stable:
+        if not errors and tds_stable and ph_stable and turb_stable:
             logger.info("Capteurs stabilisés — lecture fiable")
-        else:
-            logger.warning("Certains capteurs n'ont pas convergé (timeout)")
 
         return {
             "ph":           voltage_to_ph(v_ph, temperature=temp),
@@ -303,6 +324,7 @@ class ADS1115Reader:
             "Conductivity": ec,
             "Turbidity":    voltage_to_turbidity(v_turb),
             "Temperature":  temp,
+            "_sensor_errors": errors,
         }
 
 
@@ -427,6 +449,9 @@ class SensorPipeline:
         t0  = time.perf_counter()
         raw = self.reader.read_features()
 
+        # Erreurs matérielles remontées par le reader (échec I2C/1-Wire, timeout stabilisation)
+        sensor_errors = list(raw.pop("_sensor_errors", []))
+
         # Vérification des bornes sur toutes les mesures (y compris température)
         all_bounds = {**PHYSICAL_BOUNDS}
         out_of_bounds = [
@@ -439,7 +464,6 @@ class SensorPipeline:
 
         # Détection capteur invalide (déconnecté ou saturé)
         SATURATION_VALUES = {"Turbidity": 4550.0, "Conductivity": 0.0, "Solids": 0.0}
-        sensor_errors = []
         for f in FEATURES:
             v = raw.get(f, 0.0)
             if v == 0.0 and f != "ph":
