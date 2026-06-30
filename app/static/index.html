@@ -181,15 +181,33 @@
     .confidence-bar-bg {
       height: 8px; border-radius: 4px;
       background: var(--bg3);
-      overflow: hidden;
+      overflow: visible;
+      position: relative;
+    }
+    .risk-zones {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      background: linear-gradient(90deg,
+        #1a6b3a 0%, #1a6b3a 40%,
+        #7a5a00 40%, #7a5a00 60%,
+        #7a1a1a 60%, #7a1a1a 100%);
+      border-radius: 4px;
+      opacity: 0.4;
     }
     .confidence-bar-fill {
       height: 100%; border-radius: 4px;
-      background: linear-gradient(90deg, var(--ocean), var(--mint));
-      transition: width .6s ease;
+      transition: width .6s ease, background .6s ease;
       width: 0%;
+      position: relative; z-index: 1;
     }
-    .confidence-value { font-size: 1.1rem; font-weight: 600; color: var(--mint); margin-top: .3rem; }
+    .risk-zone-labels {
+      display: flex; justify-content: space-between;
+      font-size: .62rem; color: var(--text-muted); margin-top: .3rem; padding: 0 2px;
+    }
+    .confidence-value { font-size: 1.05rem; font-weight: 600; margin-top: .3rem; display: flex; align-items: center; gap: .4rem; }
+    .risk-level-badge {
+      font-size: .72rem; font-weight: 600;
+      padding: .15rem .55rem; border-radius: 20px;
+    }
     .inference-time { font-size: .72rem; color: var(--text-muted); font-family: 'JetBrains Mono'; }
 
     /* Capteurs */
@@ -786,9 +804,18 @@
         <div class="confidence-wrap">
           <div class="confidence-label">Indice de risque (probabilité Non potable)</div>
           <div class="confidence-bar-bg">
+            <div class="risk-zones"></div>
             <div class="confidence-bar-fill" id="confBar"></div>
           </div>
-          <div class="confidence-value" id="confVal">—</div>
+          <div class="risk-zone-labels">
+            <span style="color:#3fb950">Faible</span>
+            <span style="color:#e3b341">Modéré</span>
+            <span style="color:#f85149">Élevé</span>
+          </div>
+          <div class="confidence-value" id="confVal">
+            <span id="confPct">—</span>
+            <span class="risk-level-badge" id="confBadge"></span>
+          </div>
         </div>
         <div>
           <div class="confidence-label">Seuil de décision</div>
@@ -1282,18 +1309,40 @@ function updateDiagnostic(data) {
     showToast('Capteur(s) invalide(s) : ' + errors.join(', '));
   }
 
-  // Confiance
+  // Indice de risque
   if (proba !== null && proba !== undefined) {
     const pct = (proba * 100).toFixed(1);
-    document.getElementById('confBar').style.width = pct + '%';
-    document.getElementById('confVal').textContent  = pct + '% risque Non potable';
-    document.getElementById('confBar').style.background =
-      proba >= thresh ? 'linear-gradient(90deg,#c0392b,#f85149)'
-                      : 'linear-gradient(90deg,var(--ocean),var(--mint))';
+    const bar  = document.getElementById('confBar');
+    const pctEl = document.getElementById('confPct');
+    const badge = document.getElementById('confBadge');
+    bar.style.width = pct + '%';
+    pctEl.textContent = pct + '%';
+
+    let lvl, color, bg;
+    if (proba < 0.40) {
+      lvl = 'Faible'; color = '#3fb950'; bg = 'rgba(63,185,80,0.15)';
+      bar.style.background = 'linear-gradient(90deg,#1a6b3a,#3fb950)';
+    } else if (proba < 0.60) {
+      lvl = 'Modéré'; color = '#e3b341'; bg = 'rgba(227,179,65,0.15)';
+      bar.style.background = 'linear-gradient(90deg,#7a5a00,#e3b341)';
+    } else if (proba < 0.80) {
+      lvl = 'Élevé'; color = '#f0883e'; bg = 'rgba(240,136,62,0.15)';
+      bar.style.background = 'linear-gradient(90deg,#a04000,#f0883e)';
+    } else {
+      lvl = 'Critique'; color = '#f85149'; bg = 'rgba(248,81,73,0.15)';
+      bar.style.background = 'linear-gradient(90deg,#7a1a1a,#f85149)';
+    }
+    pctEl.style.color = color;
+    badge.textContent = lvl;
+    badge.style.color = color;
+    badge.style.background = bg;
+    badge.style.border = `1px solid ${color}`;
   }
   document.getElementById('threshVal').textContent = 'Seuil : ' + (thresh * 100).toFixed(0) + '%';
+  const infer = (data.inference_time_ms || 0).toFixed(1);
+  const sread = data.sensor_read_ms != null ? (data.sensor_read_ms / 1000).toFixed(1) + 's' : null;
   document.getElementById('inferTime').textContent =
-    'Inférence : ' + (data.inference_time_ms || 0).toFixed(1) + ' ms';
+    sread ? `Capteurs : ${sread}  |  Inférence ML : ${infer} ms` : `Inférence : ${infer} ms`;
 
   // Graphique temps reel
   updateRealtimeCharts(raw, data.timestamp);

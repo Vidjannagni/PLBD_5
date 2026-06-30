@@ -446,8 +446,9 @@ class SensorPipeline:
         """
         import datetime
 
-        t0  = time.perf_counter()
+        t0_total = time.perf_counter()
         raw = self.reader.read_features()
+        t0_infer = time.perf_counter()
 
         # Erreurs matérielles remontées par le reader (échec I2C/1-Wire, timeout stabilisation)
         sensor_errors = list(raw.pop("_sensor_errors", []))
@@ -489,27 +490,29 @@ class SensorPipeline:
             label = "Non fiable"
             logger.warning("Capteurs invalides : %s", sensor_errors)
 
-        elapsed_ms = (time.perf_counter() - t0) * 1000
+        inference_ms = (time.perf_counter() - t0_infer) * 1000
+        sensor_ms    = (t0_infer - t0_total) * 1000
 
         result = {
-            "timestamp":         datetime.datetime.now().isoformat(timespec="seconds"),
-            "raw_values":        raw,
-            "potability_now":    pred,
-            "potability_label":  label,
-            "confidence_proba":  round(proba, 4),
-            "threshold":         threshold,
-            "out_of_bounds":     out_of_bounds,
-            "sensor_errors":     sensor_errors,
-            "inference_time_ms": round(elapsed_ms, 2),
+            "timestamp":          datetime.datetime.now().isoformat(timespec="seconds"),
+            "raw_values":         raw,
+            "potability_now":     pred,
+            "potability_label":   label,
+            "confidence_proba":   round(proba, 4),
+            "threshold":          threshold,
+            "out_of_bounds":      out_of_bounds,
+            "sensor_errors":      sensor_errors,
+            "inference_time_ms":  round(inference_ms, 2),
+            "sensor_read_ms":     round(sensor_ms, 0),
         }
 
         logger.info(
             "[%s] pH=%.2f | TDS=%.0f mg/L | Cond=%.1f µS/cm | "
-            "Turb=%.2f NTU | Temp=%.1f °C → %s (p=%.2f) | %.1f ms",
+            "Turb=%.2f NTU | Temp=%.1f °C → %s (p=%.2f) | capteurs=%.0f ms inférence=%.1f ms",
             result["timestamp"],
             raw["ph"], raw["Solids"], raw["Conductivity"],
             raw["Turbidity"], raw["Temperature"],
-            label, proba, elapsed_ms,
+            label, proba, sensor_ms, inference_ms,
         )
         return result
 
