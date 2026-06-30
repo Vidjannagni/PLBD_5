@@ -274,9 +274,11 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     _ws_clients.append(websocket)
     logger.info("Client WebSocket connecté (total: %d)", len(_ws_clients))
+    loop = asyncio.get_event_loop()
     try:
         while True:
-            data = _run_diagnostic()
+            # Exécuter la lecture capteurs dans un thread pour ne pas bloquer l'event loop
+            data = await loop.run_in_executor(None, _run_diagnostic)
             await websocket.send_json(data)
             await asyncio.sleep(REFRESH_S)
     except WebSocketDisconnect:
@@ -284,7 +286,8 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error("Erreur WebSocket : %s", e)
     finally:
-        _ws_clients.remove(websocket)
+        if websocket in _ws_clients:
+            _ws_clients.remove(websocket)
         logger.info("Client WebSocket déconnecté (total: %d)", len(_ws_clients))
 
 
@@ -344,7 +347,22 @@ def _run_diagnostic() -> dict:
             "timestamp":         _now(),
         }
 
-    result = pipeline.run_once()
+    try:
+        result = pipeline.run_once()
+    except Exception as e:
+        logger.error("Erreur lecture capteurs : %s", e)
+        return {
+            "type":              "diagnostic",
+            "error":             f"Erreur capteurs : {e}",
+            "raw_values":        {f: 0.0 for f in DIAG_FEATURES},
+            "potability_now":    None,
+            "potability_label":  "Erreur",
+            "confidence_proba":  None,
+            "out_of_bounds":     [],
+            "inference_time_ms": 0,
+            "timestamp":         _now(),
+            "filter_decision":   None,
+        }
 
     # Accumuler les mesures dans le buffer brut pour la médiane horaire
     _update_buffers(result["raw_values"])
